@@ -122,4 +122,8 @@ make build                                  # builds the React app + Go binary
 
 Personal / home project. Use at your own risk on a trusted local network.
 
+## Author
+
+Made by [jpinela24](https://github.com/jpinela24).
+
 🤖 Built with [Claude Code](https://claude.com/claude-code)

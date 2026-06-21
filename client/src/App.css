@@ -2058,6 +2058,21 @@ body {
   letter-spacing: 0.02em;
 }
 
+.settings-credit {
+  display: block;
+  margin-top: 4px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #52525b;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+.settings-credit:hover {
+  color: #8b8b99;
+  text-decoration: underline;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    v1.5 — Apple / iOS "liquid glass" theme
    Appended override layer: re-skins the foundational surfaces without touching

@@ -2160,6 +2160,14 @@ function SettingsModal({ adminToken, onClose }) {
             </div>
 
             <p className="settings-version">PhotoShare v{APP_VERSION}</p>
+            <a
+              className="settings-credit"
+              href="https://github.com/jpinela24"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Made by jpinela24 on GitHub
+            </a>
           </>
         )}
       </div>
