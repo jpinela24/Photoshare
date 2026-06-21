@@ -1,0 +1,11 @@
+.git
+.gitignore
+client/node_modules
+client/dist
+photoshare
+*.log
+photoshare-config
+photoshare.config.json
+cert.pem
+key.pem
+README.md

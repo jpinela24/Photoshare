@@ -1,0 +1,14 @@
+# Build output
+photoshare
+client/dist/
+client/node_modules/
+
+# Runtime / per-machine
+photoshare.config.json
+photoshare.log
+cert.pem
+key.pem
+
+# OS / editor clutter
+.DS_Store
+*.log

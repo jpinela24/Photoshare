@@ -1,0 +1,24 @@
+services:
+  photoshare:
+    build: .
+    # Or use a prebuilt image instead of building:
+    # image: photoshare:latest
+    container_name: photoshare
+    restart: unless-stopped
+    ports:
+      - "8088:8080"             # host 8088 → container 8080 (8080 taken by homepage)
+    environment:
+      PHOTO_DIR: /photos        # library path inside the container (mounted below)
+      DATA_DIR: /config         # where config/log/cert persist
+      PORT: "8080"
+      HTTP_ONLY: "true"         # plain HTTP (nginx reverse proxy in front for TLS)
+      # First-run admin account (ignored once accounts exist — change in Settings):
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: change-me
+      # Host LAN IP + published port so QR codes / "open on network" links are correct:
+      SERVER_IP: "10.0.0.20"
+      PUBLIC_PORT: "8088"
+      # AUTO_SORT: "true"       # auto-file inbox uploads into Year/Month folders
+    volumes:
+      - /mnt/data/MEMORIES:/photos          # photo library (1.8T drive)
+      - ./photoshare-config:/config         # persisted config (keep this)
