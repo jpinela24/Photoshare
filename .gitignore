@@ -1,5 +1,7 @@
 # Build output
 photoshare
+photoshare.exe
+windows/Output/
 client/dist/
 client/node_modules/
 

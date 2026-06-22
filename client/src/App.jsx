@@ -2075,6 +2075,11 @@ function SettingsModal({ adminToken, onClose }) {
   const [busy, setBusy]     = useState(false)
   const [error, setError]   = useState(null)
   const [saved, setSaved]   = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
+  const [isWindows, setIsWindows]   = useState(false)
+  const [autostart, setAutostart]   = useState(false)
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [updateBusy, setUpdateBusy] = useState(false)
 
   useEffect(() => {
     fetch('/api/settings', { credentials: 'same-origin' })
@@ -2082,6 +2087,39 @@ function SettingsModal({ adminToken, onClose }) {
       .then(setCfg)
       .catch(() => setError('Failed to load settings'))
   }, [])
+
+  useEffect(() => {
+    fetch('/api/platform').then(r => r.json()).then(d => {
+      setIsWindows(!!d.windows)
+      if (d.windows) {
+        fetch('/api/autostart').then(r => r.ok ? r.json() : null)
+          .then(d => d && setAutostart(!!d.enabled)).catch(() => {})
+      }
+    }).catch(() => {})
+  }, [])
+
+  const toggleAutostart = async (enabled) => {
+    setAutostart(enabled)
+    await adminFetch('/api/autostart', null, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled })
+    })
+  }
+
+  const checkUpdate = async () => {
+    setUpdateBusy(true)
+    try {
+      const r = await fetch('/api/update/check')
+      setUpdateInfo(await r.json())
+    } catch { setUpdateInfo({ error: 'Update check failed' }) }
+    setUpdateBusy(false)
+  }
+
+  const runUpdate = async () => {
+    if (!window.confirm('Download and install the update now? PhotoShare will close and the installer will open.')) return
+    setUpdateBusy(true)
+    await adminFetch('/api/update/run', null, { method: 'POST' })
+  }
 
   const save = async () => {
     setBusy(true); setError(null)
@@ -2117,7 +2155,10 @@ function SettingsModal({ adminToken, onClose }) {
             <div className="settings-grid">
               <label className="settings-label">
                 <span className="settings-label-head"><FolderIcon size={13} /> Photos Folder</span>
-                <input className="adm-input" value={cfg.photoDir||''} onChange={e => set('photoDir', e.target.value)} placeholder="/photos" />
+                <div style={{display:'flex', gap:8}}>
+                  <input className="adm-input" value={cfg.photoDir||''} onChange={e => set('photoDir', e.target.value)} placeholder="/photos" />
+                  <button className="adm-btn" type="button" onClick={() => setShowPicker(true)}>Browse…</button>
+                </div>
               </label>
               <label className="settings-label">
                 <span className="settings-label-head"><PlugIcon size={13} /> Port</span>
@@ -2147,7 +2188,38 @@ function SettingsModal({ adminToken, onClose }) {
                 <input type="checkbox" checked={!!cfg.autoSortUploads} onChange={e => set('autoSortUploads', e.target.checked)} />
                 <span className="settings-label-head"><CalendarIcon size={13} /> Auto-sort uploads into Year/Month folders by date</span>
               </label>
+              {isWindows && (
+                <label className="settings-label settings-check">
+                  <input type="checkbox" checked={autostart} onChange={e => toggleAutostart(e.target.checked)} />
+                  <span className="settings-label-head">Start PhotoShare when Windows starts</span>
+                </label>
+              )}
             </div>
+
+            {isWindows && (
+              <div className="settings-grid" style={{marginTop:10}}>
+                <div className="settings-label">
+                  <span className="settings-label-head">Updates</span>
+                  {!updateInfo && (
+                    <button className="adm-btn" type="button" onClick={checkUpdate} disabled={updateBusy}>
+                      {updateBusy ? 'Checking…' : 'Check for updates'}
+                    </button>
+                  )}
+                  {updateInfo && updateInfo.error && <p className="adm-error">{updateInfo.error}</p>}
+                  {updateInfo && !updateInfo.error && !updateInfo.available && (
+                    <p className="adm-modal-sub">You're up to date (v{updateInfo.current}).</p>
+                  )}
+                  {updateInfo && updateInfo.available && (
+                    <div>
+                      <p className="adm-modal-sub">v{updateInfo.latest} is available (you have v{updateInfo.current}).</p>
+                      <button className="adm-btn adm-btn-primary" type="button" onClick={runUpdate} disabled={updateBusy}>
+                        {updateBusy ? 'Updating…' : 'Download & install'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {error && <div className="adm-error" style={{marginTop:8}}>{error}</div>}
             <p className="adm-warn" style={{marginTop:10}}>⚠ Saving will restart the app.</p>
@@ -2171,6 +2243,12 @@ function SettingsModal({ adminToken, onClose }) {
           </>
         )}
       </div>
+      {showPicker && (
+        <LibraryPathPicker
+          onClose={() => setShowPicker(false)}
+          onConfirm={p => { set('photoDir', p); setShowPicker(false) }}
+        />
+      )}
     </div>
   )
 }
@@ -2208,6 +2286,75 @@ function FolderPickerNode({ path, label, onPick, selected }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── LibraryPathPicker — choose the library root itself (any OS path) ────────
+
+function FsPickerNode({ path, label, onPick, selected }) {
+  const [open, setOpen]         = useState(false)
+  const [children, setChildren] = useState(null)
+
+  useEffect(() => {
+    if (!open) return
+    fetch(`/api/fs/browse?path=${encodeURIComponent(path)}`)
+      .then(r => r.json())
+      .then(data => setChildren((data || []).filter(e => e.isDir)))
+      .catch(() => setChildren([]))
+  }, [open])
+
+  return (
+    <div className="fp-node">
+      <div className={`fp-row ${selected === path ? 'fp-active' : ''}`}>
+        <button className="fp-toggle" onClick={() => setOpen(v => !v)}>
+          {open ? <ChevronDown /> : <ChevronRight />}
+        </button>
+        <span className="fp-label" onClick={() => onPick(path)}>{label}</span>
+        <button className="fp-pick-btn" onClick={() => onPick(path)}>Select</button>
+      </div>
+      {open && children && (
+        <div className="fp-children">
+          {children.map(c => (
+            <FsPickerNode key={c.path} path={c.path} label={c.name} onPick={onPick} selected={selected} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LibraryPathPicker({ onConfirm, onClose }) {
+  const [roots, setRoots] = useState(null)
+  const [dest, setDest]   = useState(null)
+
+  useEffect(() => {
+    fetch('/api/fs/roots').then(r => r.json()).then(setRoots).catch(() => setRoots([]))
+  }, [])
+
+  return (
+    <div className="adm-overlay" onClick={onClose}>
+      <div className="adm-modal fp-modal" onClick={e => e.stopPropagation()}>
+        <div className="adm-modal-icon"><OpenFolderIcon size={30} /></div>
+        <h2 className="adm-modal-title">Choose Photo Library Folder</h2>
+        <div className="fp-tree">
+          {roots === null && <p className="adm-modal-sub">Loading drives…</p>}
+          {roots && roots.map(r => (
+            <FsPickerNode key={r.path} path={r.path} label={r.name} onPick={setDest} selected={dest} />
+          ))}
+        </div>
+        {dest !== null && (
+          <p className="adm-modal-sub" style={{marginTop:6}}>
+            Selected: <strong style={{color:'#a5b4fc'}}>{dest}</strong>
+          </p>
+        )}
+        <div className="adm-btns" style={{marginTop:12}}>
+          <button className="adm-btn" onClick={onClose}>Cancel</button>
+          <button className="adm-btn adm-btn-primary" disabled={dest === null} onClick={() => onConfirm(dest)}>
+            Confirm
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2285,7 +2432,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.2'
+const APP_VERSION = '2.3'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2313,6 +2460,84 @@ if (typeof document !== 'undefined') {
 }
 
 // ── Login page (full-screen gate) ──────────────────────────────────────────────
+// ── OnboardingPage — first-run setup: pick a library folder + create admin ──
+
+function OnboardingPage() {
+  const [photoDir, setPhotoDir]     = useState('')
+  const [username, setUsername]     = useState('admin')
+  const [password, setPassword]     = useState('')
+  const [showPicker, setShowPicker] = useState(false)
+  const [busy, setBusy]             = useState(false)
+  const [error, setError]           = useState(null)
+  const [done, setDone]             = useState(false)
+
+  const submit = async () => {
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch('/api/onboarding', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ photoDir, username, password })
+      })
+      if (!r.ok) { setError(await r.text()); setBusy(false); return }
+      setDone(true)
+    } catch {
+      setError('Setup failed'); setBusy(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="login-loading">
+        <div className="spinner" />
+        <p style={{marginTop:12, color:'#a5b4fc'}}>Setting up PhotoShare — reconnecting…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="adm-overlay" style={{position:'fixed'}}>
+      <div className="adm-modal settings-modal" onClick={e => e.stopPropagation()}>
+        <div className="adm-modal-icon"><LibraryIcon size={30} /></div>
+        <h2 className="adm-modal-title">Welcome to PhotoShare</h2>
+        <p className="adm-modal-sub">Pick your photo library folder and create the admin account.</p>
+        <div className="settings-grid">
+          <label className="settings-label">
+            <span className="settings-label-head"><FolderIcon size={13} /> Photos Folder</span>
+            <div style={{display:'flex', gap:8}}>
+              <input className="adm-input" value={photoDir} onChange={e => setPhotoDir(e.target.value)} placeholder={'C:\\Photos'} />
+              <button className="adm-btn" type="button" onClick={() => setShowPicker(true)}>Browse…</button>
+            </div>
+          </label>
+          <label className="settings-label">
+            <span className="settings-label-head">Admin Username</span>
+            <input className="adm-input" value={username} onChange={e => setUsername(e.target.value)} />
+          </label>
+          <label className="settings-label">
+            <span className="settings-label-head">Admin Password</span>
+            <input className="adm-input" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          </label>
+        </div>
+        {error && <div className="adm-error" style={{marginTop:8}}>{error}</div>}
+        <div className="adm-btns" style={{marginTop:12}}>
+          <button
+            className="adm-btn adm-btn-primary"
+            disabled={busy || !photoDir || !username || !password}
+            onClick={submit}
+          >
+            {busy ? 'Setting up…' : 'Finish Setup'}
+          </button>
+        </div>
+      </div>
+      {showPicker && (
+        <LibraryPathPicker
+          onClose={() => setShowPicker(false)}
+          onConfirm={p => { setPhotoDir(p); setShowPicker(false) }}
+        />
+      )}
+    </div>
+  )
+}
+
 function LoginPage({ guestAccess, onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -2384,6 +2609,16 @@ export default function App() {
   const [showQR, setShowQR] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [playingPath, setPlayingPath] = useState(null)
+  // First-run check: true if no photo library path has been configured yet
+  // (a fresh Windows install before onboarding completes). null = loading.
+  const [needsSetup, setNeedsSetup] = useState(null)
+  useEffect(() => {
+    fetch('/api/onboarding-status')
+      .then(r => r.json())
+      .then(d => setNeedsSetup(!!d.needsSetup))
+      .catch(() => setNeedsSetup(false))
+  }, [])
+
   // Auth: me = null (loading) | { authenticated, role, username, guestAccess, isGuest }
   const [me, setMe] = useState(null)
   const loadMe = useCallback(async () => {
@@ -2393,7 +2628,7 @@ export default function App() {
       setMe(d)
     } catch { setMe({ authenticated: false, guestAccess: false }) }
   }, [])
-  useEffect(() => { loadMe() }, [loadMe])
+  useEffect(() => { if (needsSetup === false) loadMe() }, [needsSetup, loadMe])
   // adminToken is a truthy sentinel when the logged-in user is an admin, so all
   // existing `adminToken ? …` gates and adminFetch(url, adminToken) calls work.
   const adminToken = (me && me.authenticated && me.role === 'admin') ? 'admin' : null
@@ -2665,9 +2900,13 @@ export default function App() {
   }
 
 
-  // ── Auth gate: nothing renders until logged in ──
-  if (me === null) {
+  // ── Setup/auth gate: nothing renders until the library is configured and
+  // the user is logged in ──
+  if (needsSetup === null || (needsSetup === false && me === null)) {
     return <div className="login-loading"><div className="spinner" /></div>
+  }
+  if (needsSetup) {
+    return <OnboardingPage />
   }
   if (!me.authenticated) {
     return <LoginPage guestAccess={me.guestAccess} onLogin={loadMe} />

@@ -1,13 +1,14 @@
 # PhotoShare
 
-**A self-hosted photo & video library for your home network — runs as a Docker container.**
+**A self-hosted photo & video library for your home network — runs as a Docker container or a native Windows desktop app.**
 
 PhotoShare turns a folder of photos and videos into a fast, private, Google
 Photos-style gallery you can browse from any device on your LAN — no cloud, no
 subscriptions, no third-party accounts. It's a single Go binary with an embedded
-React web UI, packaged as a small Docker image.
+React web UI, packaged as a small Docker image (Linux) or an installer with a
+tray icon and a native window (Windows).
 
-**Current version: v2.2** · Linux / Docker
+**Current version: v2.3** · Linux / Docker · Windows
 
 ---
 
@@ -102,6 +103,62 @@ make build                                  # builds the React app + Go binary
 
 ---
 
+## Run on Windows
+
+PhotoShare also ships as a native Windows desktop app: a system tray icon,
+its own window (no browser tab), and an installer like any other Windows
+program — no Docker required.
+
+1. Download and run **PhotoShareSetup.exe** (built from `windows/installer.iss`).
+2. On first launch, pick your photo library folder and create the admin
+   account right in the app — no config file editing needed.
+3. PhotoShare lives in the system tray; closing the window just hides it.
+   Right-click the tray icon for **Open**, **Open in browser**, **Copy URL**,
+   and **Quit**.
+4. In Settings, optionally enable **"Start PhotoShare when Windows starts"**
+   and check for updates.
+
+Config and the library path live in `%APPDATA%\PhotoShare`; the installer
+never touches your photos.
+
+### Building the Windows installer yourself
+
+```bash
+make build-windows                 # builds the React app + photoshare.exe
+iscc windows\installer.iss         # requires Inno Setup (https://jrsoftware.org/isinfo.php)
+```
+
+The compiled installer lands in `windows/Output/PhotoShareSetup.exe`.
+Re-running it for a later version updates the binary in place and keeps your
+existing library path and accounts.
+
+---
+
+## Releasing a new version
+
+One repo, one codebase — Go build tags (`*_windows.go` vs `*_stub.go`) keep
+the Windows-only code out of the Linux/Docker build and vice versa. Pushing
+code alone doesn't update anyone; each platform's artifact is built and
+published separately, automatically, by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+whenever a version tag is pushed:
+
+```bash
+git tag v2.3
+git push origin v2.3
+```
+
+That single push triggers two parallel jobs:
+- **Windows**: builds `photoshare.exe`, compiles the Inno Setup installer,
+  and attaches `PhotoShareSetup.exe` to the GitHub Release for that tag
+  (creating the release if it doesn't exist yet) — this is what the app's
+  in-app "Check for updates" button looks for.
+- **Docker**: builds the image and pushes it to
+  `ghcr.io/jpinela24/photoshare:v2.3` and `:latest`.
+
+No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
+
+---
+
 ## Changelog
 
 | Ver | Highlights |
@@ -115,6 +172,7 @@ make build                                  # builds the React app + Go binary
 | **2.0** | Login gate with multiple accounts (admin/viewer) + guest access, cookie sessions; Docker/Linux deployment with env-var config |
 | **2.1** | Google Photos / Material restyle — tight grid, image-only photo tiles, blue accent, dark + light |
 | **2.2** | HEIC via libheif; on-the-fly HEVC→H.264 transcode with explicit MIME (plays everywhere); cinematic folder transitions; `PUBLIC_PORT`/`PUBLIC_URL` for correct QR; real disk-space stats; hidden housekeeping folders; **Docker/Linux only** |
+| **2.3** | Windows support is back, done properly this time: native installer, system tray, WebView2 window, in-app first-run setup (pick your library folder + create the admin account with no config editing), opt-in login autostart, in-app update check |
 
 ---
 

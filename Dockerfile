@@ -7,7 +7,7 @@ COPY client/ ./
 RUN npm run build
 
 # ── Backend (Go) ─────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS backend
+FROM golang:1.25-alpine AS backend
 WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -563,17 +565,312 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("[SETTINGS] Config saved — exiting to restart")
+		log.Printf("[SETTINGS] Config saved — restarting")
 		w.WriteHeader(http.StatusOK)
 		go func() {
-			// Exit so the container/service supervisor restarts us with the new
-			// config (Docker `restart: unless-stopped`, systemd, etc.).
 			time.Sleep(600 * time.Millisecond)
-			os.Exit(0)
+			restartProcess()
 		}()
 		return
 	}
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// appVersion is the running build's version — must match client APP_VERSION.
+const appVersion = "2.3"
+
+// updateRepo is the GitHub "owner/repo" releases are published under, used by
+// the in-app "Check for updates" feature.
+const updateRepo = "jpinela24/Photoshare"
+
+// GET /api/onboarding-status — {needsSetup} is true when no photo library
+// path has been configured yet (first run on a fresh Windows install).
+func onboardingStatusHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"needsSetup": baseDir == ""})
+}
+
+// POST /api/onboarding {photoDir, username, password} — first-run setup: only
+// works while no library path is configured. Sets the library path, renames
+// the seeded default admin account to the chosen credentials, and restarts.
+func onboardingHandler(w http.ResponseWriter, r *http.Request) {
+	if baseDir != "" {
+		http.Error(w, "setup already completed", http.StatusConflict)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		PhotoDir string `json:"photoDir"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	body.PhotoDir = strings.TrimSpace(body.PhotoDir)
+	body.Username = strings.TrimSpace(body.Username)
+	if body.PhotoDir == "" {
+		http.Error(w, "photo directory is required", http.StatusBadRequest)
+		return
+	}
+	if fi, err := os.Stat(body.PhotoDir); err != nil || !fi.IsDir() {
+		http.Error(w, "photo directory does not exist: "+body.PhotoDir, http.StatusBadRequest)
+		return
+	}
+	if body.Username == "" || body.Password == "" {
+		http.Error(w, "username and password are required", http.StatusBadRequest)
+		return
+	}
+	hash, err := hashPassword(body.Password)
+	if err != nil {
+		http.Error(w, "failed to hash password", http.StatusInternalServerError)
+		return
+	}
+	cfg := loadConfig(configFilePath)
+	cfg.PhotoDir = body.PhotoDir
+	usersMu.Lock()
+	users = []User{{Username: body.Username, PassHash: hash, Role: "admin"}}
+	cfg.Users = append([]User(nil), users...)
+	usersMu.Unlock()
+	cfg.AdminPass = ""
+	cfg.AdminPassHash = ""
+	if err := saveConfig(configFilePath, cfg); err != nil {
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[ONBOARDING] Library set to %s — restarting", body.PhotoDir)
+	w.WriteHeader(http.StatusOK)
+	go func() {
+		time.Sleep(600 * time.Millisecond)
+		restartProcess()
+	}()
+}
+
+// GET /api/platform — lets the UI conditionally show Windows-only controls.
+func platformHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"windows": runtime.GOOS == "windows",
+		"version": appVersion,
+	})
+}
+
+// FSEntry is a directory entry for the unrestricted filesystem browser used
+// to pick the library root itself (distinct from browseHandler, which is
+// scoped to inside the already-configured library).
+type FSEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	IsDir bool   `json:"isDir"`
+}
+
+// GET /api/fs/roots — top-level roots to start browsing from (drive letters
+// on Windows, "/" + home directory elsewhere).
+func fsRootsHandler(w http.ResponseWriter, r *http.Request) {
+	var roots []FSEntry
+	if runtime.GOOS == "windows" {
+		for _, letter := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+			drive := string(letter) + ":\\"
+			if _, err := os.Stat(drive); err == nil {
+				roots = append(roots, FSEntry{Name: drive, Path: drive, IsDir: true})
+			}
+		}
+	} else {
+		roots = append(roots, FSEntry{Name: "/", Path: "/", IsDir: true})
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			roots = append(roots, FSEntry{Name: "Home", Path: home, IsDir: true})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(roots)
+}
+
+// GET /api/fs/browse?path= — lists any directory the OS user can read, for
+// picking the library root on first run or from Settings.
+func fsBrowseHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		http.Error(w, "cannot read directory: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var result []FSEntry
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		result = append(result, FSEntry{Name: e.Name(), Path: filepath.Join(path, e.Name()), IsDir: true})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// GET/POST /api/autostart — Windows-only: toggle launching PhotoShare at login.
+func autostartHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if runtime.GOOS != "windows" {
+		http.Error(w, "autostart is only supported on Windows", http.StatusNotImplemented)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"enabled": autostartEnabled()})
+	case http.MethodPost:
+		var body struct{ Enabled bool `json:"enabled"` }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := setAutostart(body.Enabled); err != nil {
+			http.Error(w, "failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// POST /api/show — restores/focuses the native window (tray "Open" item).
+func showHandler(w http.ResponseWriter, r *http.Request) {
+	showWindow()
+	w.Write([]byte("ok"))
+}
+
+// POST /api/quit — gracefully exits (tray "Quit" item).
+func quitHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("bye"))
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
+type githubRelease struct {
+	TagName string `json:"tag_name"`
+	HTMLURL string `json:"html_url"`
+	Assets  []struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// GET /api/update/check — compares the running version against the latest
+// GitHub release and returns whether an update is available.
+func updateCheckHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	rel, err := latestRelease()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	latest := strings.TrimPrefix(rel.TagName, "v")
+	json.NewEncoder(w).Encode(map[string]any{
+		"current":     appVersion,
+		"latest":      latest,
+		"available":   latest != "" && latest != appVersion,
+		"releaseURL":  rel.HTMLURL,
+		"downloadURL": installerAssetURL(rel),
+	})
+}
+
+// POST /api/update/run — downloads the latest installer and launches it
+// (Windows only); the installer takes over and this process exits.
+func updateRunHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if runtime.GOOS != "windows" {
+		http.Error(w, "in-app updates are only supported on Windows", http.StatusNotImplemented)
+		return
+	}
+	rel, err := latestRelease()
+	if err != nil {
+		http.Error(w, "update check failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	url := installerAssetURL(rel)
+	if url == "" {
+		http.Error(w, "no installer asset found in latest release", http.StatusInternalServerError)
+		return
+	}
+	if err := downloadAndRunInstaller(url); err != nil {
+		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
+func latestRelease() (*githubRelease, error) {
+	resp, err := http.Get("https://api.github.com/repos/" + updateRepo + "/releases/latest")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github returned %d", resp.StatusCode)
+	}
+	var rel githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, err
+	}
+	return &rel, nil
+}
+
+func installerAssetURL(rel *githubRelease) string {
+	if rel == nil {
+		return ""
+	}
+	for _, a := range rel.Assets {
+		if strings.HasSuffix(strings.ToLower(a.Name), ".exe") {
+			return a.BrowserDownloadURL
+		}
+	}
+	return ""
+}
+
+func downloadAndRunInstaller(url string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+	out := filepath.Join(os.TempDir(), "photoshare-update-installer.exe")
+	f, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+	cmd := exec.Command(out)
+	return cmd.Start()
 }
 
 // GET /api/server-info — returns server IP, share name and shareable URL
@@ -964,8 +1261,9 @@ func manifestHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// servePWAIcon generates a simple PNG icon at the given size
-func servePWAIcon(w http.ResponseWriter, size int) {
+// appIcon renders the PhotoShare camera glyph at the given size — shared by
+// the PWA manifest icons and (on Windows) the tray/taskbar icon.
+func appIcon(size int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	bg     := color.NRGBA{99, 102, 241, 255}  // indigo
 	accent := color.NRGBA{165, 180, 252, 255} // light indigo
@@ -1008,10 +1306,22 @@ func servePWAIcon(w http.ResponseWriter, size int) {
 			}
 		}
 	}
+	return img
+}
 
+// appIconPNG renders appIcon to PNG bytes — used by the Windows tray/window
+// icon, which needs a file on disk rather than an HTTP response.
+func appIconPNG(size int) []byte {
+	var buf bytes.Buffer
+	png.Encode(&buf, appIcon(size))
+	return buf.Bytes()
+}
+
+// servePWAIcon generates a simple PNG icon at the given size
+func servePWAIcon(w http.ResponseWriter, size int) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	png.Encode(w, img)
+	png.Encode(w, appIcon(size))
 }
 
 // GET /api/open-folder?path=
@@ -2895,9 +3205,20 @@ func generateSelfSignedCert(certPath, keyPath string) error {
 }
 
 func main() {
-	// Config/log/cert location — DATA_DIR (a Docker volume) or next to the exe.
+	// webview2 (Windows) must run on the OS main thread; locking this goroutine
+	// to it is a no-op everywhere else.
+	runtime.LockOSThread()
+
+	// Config/log/cert location — DATA_DIR (a Docker volume), %APPDATA%\PhotoShare
+	// on Windows, or next to the exe everywhere else.
 	exe, _ := os.Executable()
-	dataDir = envOr("DATA_DIR", filepath.Dir(exe))
+	defaultDataDir := filepath.Dir(exe)
+	if runtime.GOOS == "windows" {
+		if cfgDir, err := os.UserConfigDir(); err == nil {
+			defaultDataDir = filepath.Join(cfgDir, "PhotoShare")
+		}
+	}
+	dataDir = envOr("DATA_DIR", defaultDataDir)
 	os.MkdirAll(dataDir, 0755)
 	configFilePath = filepath.Join(dataDir, "photoshare.config.json")
 
@@ -2997,32 +3318,45 @@ func main() {
 	// The photo directory is the one machine-specific value the operator must
 	// provide, so require it to exist — don't auto-create it (a typo'd path
 	// shouldn't silently spin up an empty library). The sub-folders below ARE
-	// created automatically.
-	if info, statErr := os.Stat(baseDir); statErr != nil || !info.IsDir() {
-		log.Fatalf("photo directory does not exist: %s — set it via -dir or the config file", baseDir)
+	// created automatically. On Windows there's no operator pre-provisioning a
+	// volume, so a missing/invalid path on first run isn't fatal — the app
+	// starts anyway and the UI walks the user through onboarding to pick one.
+	info, statErr := os.Stat(baseDir)
+	validBaseDir := statErr == nil && info.IsDir()
+	if !validBaseDir {
+		if runtime.GOOS != "windows" {
+			log.Fatalf("photo directory does not exist: %s — set it via -dir or the config file", baseDir)
+		}
+		log.Printf("No valid photo directory configured yet (%s) — waiting for setup", baseDir)
+		baseDir = ""
 	}
 
-	// Trash lives inside the photo folder, exactly like the uploads inbox —
-	// no separate path to configure.
-	trashDir = filepath.Join(baseDir, "_Trash")
-	if err := os.MkdirAll(trashDir, 0755); err != nil {
-		log.Fatal("cannot create trash dir:", err)
-	}
-	log.Printf("Trash folder: %s", trashDir)
+	// Trash/uploads/thumbs live inside the photo folder; skip until one is set.
+	if validBaseDir {
+		// Trash lives inside the photo folder, exactly like the uploads inbox —
+		// no separate path to configure.
+		trashDir = filepath.Join(baseDir, "_Trash")
+		if err := os.MkdirAll(trashDir, 0755); err != nil {
+			log.Fatal("cannot create trash dir:", err)
+		}
+		log.Printf("Trash folder: %s", trashDir)
 
-	// Create uploads inbox folder
-	uploadFull := filepath.Join(baseDir, uploadDir)
-	if err := os.MkdirAll(uploadFull, 0755); err != nil {
-		log.Printf("WARNING: cannot create upload folder: %v", err)
+		// Create uploads inbox folder
+		uploadFull := filepath.Join(baseDir, uploadDir)
+		if err := os.MkdirAll(uploadFull, 0755); err != nil {
+			log.Printf("WARNING: cannot create upload folder: %v", err)
+		}
+		log.Printf("Upload inbox: %s", uploadFull)
+		log.Printf("Serving photos from: %s", baseDir)
+	} else {
+		log.Printf("No photo library configured yet — open the app to finish setup")
 	}
-	log.Printf("Upload inbox: %s", uploadFull)
 
 	thumbDir = filepath.Join(os.TempDir(), "photo-share-thumbs")
 	if err := os.MkdirAll(thumbDir, 0755); err != nil {
 		log.Fatal("cannot create thumb cache dir:", err)
 	}
 
-	log.Printf("Serving photos from: %s", baseDir)
 	log.Printf("Open http://localhost:%s in your browser", port)
 
 	mainMux = http.NewServeMux()
@@ -3075,6 +3409,31 @@ func main() {
 	mux.HandleFunc("/api/trash/restore", withCORS(trashRestoreHandler))
 	mux.HandleFunc("/api/trash/purge", withCORS(trashPurgeHandler))
 	mux.HandleFunc("/api/trash/purge-all", withCORS(trashPurgeAllHandler))
+	// /api/fs/* expose the whole filesystem (not just the library), so they
+	// require an admin session — except during first-run setup, before any
+	// session can exist yet, while baseDir is still unset.
+	mux.HandleFunc("/api/fs/roots", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if baseDir != "" && !requireAdmin(w, r) {
+			return
+		}
+		fsRootsHandler(w, r)
+	}))
+	mux.HandleFunc("/api/fs/browse", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if baseDir != "" && !requireAdmin(w, r) {
+			return
+		}
+		fsBrowseHandler(w, r)
+	}))
+	mux.HandleFunc("/api/autostart", withCORS(autostartHandler))
+	mux.HandleFunc("/api/update/check", withCORS(updateCheckHandler))
+	mux.HandleFunc("/api/update/run", withCORS(updateRunHandler))
+
+	// ── Desktop/onboarding (open: no session required) ──
+	mux.HandleFunc("/api/onboarding-status", withCORS(onboardingStatusHandler))
+	mux.HandleFunc("/api/onboarding", withCORS(onboardingHandler))
+	mux.HandleFunc("/api/platform", withCORS(platformHandler))
+	mux.HandleFunc("/api/show", withCORS(showHandler))
+	mux.HandleFunc("/api/quit", withCORS(quitHandler))
 
 	// ── Content (require a valid session — any role) ──
 	mux.HandleFunc("/api/stats", protected(statsHandler))
@@ -3211,6 +3570,18 @@ func main() {
 	// Build the "On This Day" date index in the background
 	go dateIndexer()
 
-	// Block forever — the HTTP server and background workers run in goroutines.
-	select {}
+	// On Windows, refuse to start a second copy — ask the existing instance to
+	// show its window instead. Everywhere else this is a no-op (true).
+	if !acquireSingleInstanceLock() {
+		log.Println("PhotoShare is already running — asking it to show its window")
+		http.Get(netURL + "/api/show")
+		return
+	}
+
+	// runGUI blocks on the OS main thread: on Windows it opens the native
+	// WebView2 window and the tray icon and returns when the user quits; on
+	// every other platform it's a stub that just blocks forever (equivalent
+	// to the old bare `select {}`), so Linux/Docker behavior is unchanged.
+	go startTray(netURL)
+	runGUI(netURL)
 }
