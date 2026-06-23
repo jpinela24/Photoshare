@@ -103,12 +103,30 @@ func defaultConfig() AppConfig {
 }
 
 func loadConfig(path string) AppConfig {
-	cfg := defaultConfig()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return cfg
+		// No config file yet — this really is a fresh first run.
+		return defaultConfig()
 	}
-	json.Unmarshal(data, &cfg)
+	// An existing file is the source of truth: unmarshal into a zero-value
+	// struct rather than defaultConfig(), so an omitted field reads back as
+	// empty rather than silently resurrecting defaultConfig()'s "123456"
+	// admin password (or the Windows-only `D:\MEMORIES` photo dir) on every
+	// single load — which previously caused a config rewrite on every
+	// restart and is exactly the kind of merge bug that nearly cost real
+	// admin accounts during the v2.3 rollout.
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return defaultConfig()
+	}
+	// Only backfill fields that need a non-empty operational default and
+	// carry no security sensitivity — never AdminPass/AdminPassHash/PhotoDir.
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
+	if cfg.UploadFolder == "" {
+		cfg.UploadFolder = "_Uploads"
+	}
 	return cfg
 }
 
@@ -171,6 +189,33 @@ func authenticate(username, password string) (User, bool) {
 		return User{}, false
 	}
 	return u, true
+}
+
+// knownDefaultPasswords are the values PhotoShare itself has ever seeded an
+// admin account with — defaultConfig()'s "123456" and the docker-compose.yml
+// example's "change-me" — so a still-default account can be flagged in the
+// UI instead of only ever warning in the server log on first run.
+var knownDefaultPasswords = []string{"123456", "change-me"}
+
+// hasDefaultAdminPassword reports whether any admin account's password still
+// matches one of knownDefaultPasswords. Passwords are bcrypt-hashed and
+// never stored in recoverable form, so this is the only way to detect it —
+// by comparing the hash against each known default, the same way a real
+// login attempt would.
+func hasDefaultAdminPassword() bool {
+	usersMu.Lock()
+	defer usersMu.Unlock()
+	for _, u := range users {
+		if u.Role != "admin" {
+			continue
+		}
+		for _, pw := range knownDefaultPasswords {
+			if bcrypt.CompareHashAndPassword([]byte(u.PassHash), []byte(pw)) == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // adminCount returns how many admin accounts exist (to prevent removing the last one).
@@ -559,7 +604,10 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			UploadFolder: uploadDir, FfmpegPath: ffmpegFlag, HTTPOnly: httpOnly, AutoSort: autoSort,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cfg)
+		json.NewEncoder(w).Encode(struct {
+			AppConfig
+			UsingDefaultPassword bool `json:"usingDefaultPassword"`
+		}{cfg, hasDefaultAdminPassword()})
 		return
 	}
 	if r.Method == http.MethodPost {

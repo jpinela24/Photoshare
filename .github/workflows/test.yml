@@ -1,0 +1,33 @@
+name: Test
+
+# Runs on every push/PR — unlike release.yml (which only fires on a version
+# tag), this is the cheap fast-feedback check that should catch regressions
+# like the legacy /api/admin/login mismatch or the defaultConfig() merge bug
+# before they reach a tagged release.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: go vet ./...
+      - run: go test ./...
+
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - working-directory: client
+        run: |
+          npm install
+          npm run build

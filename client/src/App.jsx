@@ -1864,6 +1864,11 @@ function SettingsModal({ adminToken, onClose }) {
 
         {cfg && (
           <>
+            {cfg.usingDefaultPassword && (
+              <p className="adm-warn" style={{marginBottom:10}}>
+                ⚠ This admin account is still using a default password — change it below in Users.
+              </p>
+            )}
             <UsersManager />
             <div className="settings-grid">
               <label className="settings-label">
