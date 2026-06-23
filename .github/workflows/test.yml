@@ -14,20 +14,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-      - run: go vet ./...
-      - run: go test ./...
-
-  client:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - working-directory: client
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      # main.go's //go:embed all:client/dist requires this to exist with at
+      # least one file before `go vet`/`go test` can even compile the
+      # package — they failed outright without it.
+      - name: Build React client
+        working-directory: client
         run: |
           npm install
           npm run build
+      - run: go vet ./...
+      - run: go test ./...
