@@ -20,5 +20,9 @@ services:
       PUBLIC_PORT: "8088"
       # AUTO_SORT: "true"       # auto-file inbox uploads into Year/Month folders
     volumes:
-      - /mnt/data/MEMORIES:/photos          # photo library (1.8T drive)
-      - ./photoshare-config:/config         # persisted config (keep this)
+      - /mnt/data/MEMORIES:/photos                            # photo library (1.8T drive)
+      # Absolute path — a relative "./photoshare-config" resolves differently
+      # depending on which directory `docker compose` is run from, and after
+      # a re-clone into a new folder it silently pointed at an empty config,
+      # resetting the admin account back to defaults. Pin it here instead.
+      - /home/jpinela/Photoshare/photoshare-config:/config
