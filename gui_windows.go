@@ -118,10 +118,10 @@ func acquireSingleInstanceLock() bool {
 // restartProcess re-execs the binary with the same arguments, then exits —
 // there's no supervisor on Windows to bring the process back up like Docker
 // or systemd, so PhotoShare has to relaunch itself after a settings/setup
-// save. It also tears down the tray's PowerShell process first so the new
-// instance's tray icon doesn't end up duplicated.
+// save. The old tray icon cleans itself up once this process exits (its
+// watchdog notices the PID is gone and disposes the icon), and the relaunched
+// instance spawns a fresh tray, so no manual teardown is needed here.
 func restartProcess() {
-	stopTray()
 	exe, err := os.Executable()
 	if err != nil {
 		os.Exit(0)

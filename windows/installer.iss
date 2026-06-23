@@ -7,7 +7,7 @@
 ; place; config/data stays in %APPDATA%\PhotoShare, untouched by the install.
 
 #define MyAppName "PhotoShare"
-#define MyAppVersion "2.3"
+#define MyAppVersion "2.4"
 #define MyAppPublisher "jpinela24"
 #define MyAppURL "https://github.com/jpinela24"
 #define MyAppExeName "photoshare.exe"
@@ -54,6 +54,12 @@ Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""PhotoShare"
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+; Kill the app; the tray's watchdog (see buildTrayScript) notices the PID is
+; gone within ~1.5s and disposes its own icon cleanly via the script's
+; Remove-Tray/finally path — so the tray never lingers. We deliberately do
+; NOT force-kill the tray PowerShell here: an external Stop-Process would
+; terminate it before its finally block runs, orphaning the NotifyIcon and
+; leaving exactly the "ghost icon until hover" this design avoids.
 Filename: "taskkill"; Parameters: "/IM {#MyAppExeName} /F"; Flags: runhidden
 Filename: "schtasks"; Parameters: "/delete /tn PhotoShare /f"; Flags: runhidden
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""PhotoShare"""; Flags: runhidden

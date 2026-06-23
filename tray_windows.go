@@ -11,8 +11,6 @@ import (
 	"strings"
 )
 
-var trayCmd *exec.Cmd
-
 // startTray writes the icon PNG and a PowerShell script to %TEMP%, then
 // launches PowerShell with the script. The tray's menu calls back into this
 // process's own HTTP API: /api/show to open the native window, /api/quit to
@@ -24,7 +22,7 @@ func startTray(url string) {
 		log.Println("tray: write icon png:", err)
 	}
 
-	script := buildTrayScript(url, iconPath)
+	script := buildTrayScript(url, iconPath, os.Getpid())
 	scriptPath := filepath.Join(tmp, "photoshare_tray.ps1")
 	bom := []byte{0xEF, 0xBB, 0xBF} // UTF-8 BOM so PowerShell reads as UTF-8
 	if err := os.WriteFile(scriptPath, append(bom, []byte(script)...), 0644); err != nil {
@@ -43,7 +41,6 @@ func startTray(url string) {
 		log.Println("tray: failed to start powershell:", err)
 		return
 	}
-	trayCmd = cmd
 	log.Println("tray: powershell started, PID", cmd.Process.Pid)
 
 	go func() {
@@ -52,23 +49,19 @@ func startTray(url string) {
 	}()
 }
 
-// stopTray kills the tray's PowerShell process, if running — called before a
-// self-relaunch (restartProcess) so the old tray icon doesn't linger
-// alongside the new instance's icon.
-func stopTray() {
-	if trayCmd != nil && trayCmd.Process != nil {
-		trayCmd.Process.Kill()
-	}
-}
-
-func buildTrayScript(url, iconPath string) string {
+// buildTrayScript renders the PowerShell tray. parentPID is this PhotoShare
+// process's PID; the script self-terminates (and disposes its icon) as soon
+// as that process is gone, so the tray never outlives the app — whether it
+// exits via Quit, a crash, Task Manager, or the uninstaller killing the exe.
+func buildTrayScript(url, iconPath string, parentPID int) string {
 	iconPath = strings.ReplaceAll(iconPath, `\`, `\\`)
 
 	return fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$url = '%s'
+$url       = '%s'
+$parentPid = %d
 
 $bmp  = [System.Drawing.Bitmap]::FromFile('%s')
 $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
@@ -78,6 +71,17 @@ $ni.Icon    = $icon
 $ni.Text    = "PhotoShare"
 $ni.Visible = $true
 
+# Dispose the tray icon exactly once, from wherever the script unwinds, so
+# Windows reaps it immediately instead of leaving a ghost until mouse-over.
+$script:cleaned = $false
+function Remove-Tray {
+    if ($script:cleaned) { return }
+    $script:cleaned = $true
+    $ni.Visible = $false
+    $ni.Dispose()
+    [System.Windows.Forms.Application]::Exit()
+}
+
 function Show-Window {
     try {
         Invoke-WebRequest "$url/api/show" -UseBasicParsing -TimeoutSec 3 | Out-Null
@@ -85,6 +89,17 @@ function Show-Window {
         Start-Process $url
     }
 }
+
+# Watchdog: when the PhotoShare process is gone (Quit, crash, Task Manager,
+# or the uninstaller killing the exe), tear the tray down so it never lingers.
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 1500
+$timer.add_Tick({
+    if (-not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) {
+        Remove-Tray
+    }
+})
+$timer.Start()
 
 $cm = New-Object System.Windows.Forms.ContextMenuStrip
 
@@ -105,9 +120,8 @@ $cm.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 $mQuit = New-Object System.Windows.Forms.ToolStripMenuItem('Quit PhotoShare')
 $mQuit.add_Click({
-    $ni.Visible = $false
     try { Invoke-WebRequest "$url/api/quit" -UseBasicParsing -TimeoutSec 2 | Out-Null } catch {}
-    [System.Windows.Forms.Application]::Exit()
+    Remove-Tray
 })
 $cm.Items.Add($mQuit) | Out-Null
 
@@ -120,6 +134,11 @@ $ni.add_MouseClick({
     }
 })
 
-[System.Windows.Forms.Application]::Run()
-`, url, iconPath)
+# finally guarantees disposal no matter how Run() unwinds.
+try {
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    Remove-Tray
+}
+`, url, parentPID, iconPath)
 }
