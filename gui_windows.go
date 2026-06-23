@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	webview "github.com/jchv/go-webview2"
@@ -46,6 +48,22 @@ func runGUI(url string) {
 	wvWindow = w
 	w.SetTitle("PhotoShare v" + appVersion)
 	w.SetSize(1280, 820, webview.HintNone)
+
+	// Make the window behave like a native app rather than a browser. The
+	// right-click context menu and devtools are already disabled by the
+	// library (Debug=false above); this additionally suppresses the zoom
+	// gestures (Ctrl+wheel, Ctrl +/-/0) and reload shortcuts (F5, Ctrl+R)
+	// that otherwise let the UI be zoomed or reloaded like a web page. Init
+	// runs before page scripts on every navigation.
+	w.Init(`(function(){
+  window.addEventListener('wheel', function(e){ if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+  window.addEventListener('keydown', function(e){
+    var k = e.key;
+    if (e.ctrlKey && (k === '+' || k === '-' || k === '=' || k === '0')) { e.preventDefault(); return; }
+    if (k === 'F5' || (e.ctrlKey && (k === 'r' || k === 'R'))) { e.preventDefault(); }
+  });
+})();`)
+
 	w.Navigate(url)
 
 	w.Dispatch(func() {
@@ -56,9 +74,68 @@ func runGUI(url string) {
 		rootHwnd = root
 		interceptWMClose(root)
 		applyWindowIcon(root)
+		restoreWindowGeometry(root)
 	})
 
+	// Persist the window's size/position so it reopens where the user left it.
+	go windowGeometrySaver()
+
 	w.Run()
+}
+
+// windowGeometry is the persisted window rectangle (screen coordinates).
+type windowGeometry struct {
+	X, Y, W, H int32
+}
+
+type winRect struct{ Left, Top, Right, Bottom int32 }
+
+func geometryPath() string { return filepath.Join(dataDir, "window.json") }
+
+// saveWindowGeometry writes the current window rect to disk, skipping bogus
+// values (minimized windows report off-screen coordinates and tiny sizes).
+func saveWindowGeometry() {
+	if rootHwnd == 0 {
+		return
+	}
+	var r winRect
+	ret, _, _ := procGetWindowRect.Call(rootHwnd, uintptr(unsafe.Pointer(&r)))
+	if ret == 0 {
+		return
+	}
+	g := windowGeometry{X: r.Left, Y: r.Top, W: r.Right - r.Left, H: r.Bottom - r.Top}
+	if g.W < 300 || g.H < 300 || g.X < -10000 || g.Y < -10000 {
+		return // minimized or garbage — don't clobber a good saved value
+	}
+	if data, err := json.Marshal(g); err == nil {
+		os.WriteFile(geometryPath(), data, 0644)
+	}
+}
+
+// restoreWindowGeometry moves/resizes the window to the last saved rect, if any.
+func restoreWindowGeometry(hwnd uintptr) {
+	data, err := os.ReadFile(geometryPath())
+	if err != nil {
+		return
+	}
+	var g windowGeometry
+	if json.Unmarshal(data, &g) != nil || g.W < 300 || g.H < 300 {
+		return
+	}
+	procSetWindowPos.Call(hwnd, 0,
+		uintptr(uint32(g.X)), uintptr(uint32(g.Y)),
+		uintptr(uint32(g.W)), uintptr(uint32(g.H)),
+		uintptr(swpNoZOrder|swpNoActivate))
+}
+
+// windowGeometrySaver periodically persists the window rect so size/position
+// survive a quit even though there's no clean shutdown hook (the tray's Quit
+// calls os.Exit). The close-to-tray path also saves immediately (see wndProc).
+func windowGeometrySaver() {
+	for {
+		time.Sleep(3 * time.Second)
+		saveWindowGeometry()
+	}
 }
 
 // showWindow is called from the /api/show HTTP handler to restore and focus
@@ -194,6 +271,9 @@ const (
 	gclpHiconsm = ^uintptr(33) // GCLP_HICONSM = -34
 
 	gaRoot = 2 // GA_ROOT
+
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
 )
 
 var (
@@ -206,6 +286,8 @@ var (
 	procSetClassLongPtr = modUser32.NewProc("SetClassLongPtrW")
 	procLoadImage       = modUser32.NewProc("LoadImageW")
 	procGetAncestor     = modUser32.NewProc("GetAncestor")
+	procGetWindowRect   = modUser32.NewProc("GetWindowRect")
+	procSetWindowPos    = modUser32.NewProc("SetWindowPos")
 
 	modKernel32     = windows.NewLazySystemDLL("kernel32.dll")
 	procCreateMutex = modKernel32.NewProc("CreateMutexW")
@@ -227,6 +309,7 @@ func interceptWMClose(hwnd uintptr) {
 
 func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	if msg == wmClose {
+		saveWindowGeometry() // remember where it was before hiding to the tray
 		showWin(hwnd, 0 /* SW_HIDE */)
 		return 0
 	}

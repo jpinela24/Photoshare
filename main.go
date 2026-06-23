@@ -3291,7 +3291,18 @@ func main() {
 	flag.StringVar(&serverIPFlag, "server-ip", envOr("SERVER_IP", cfg.ServerIP), "Override the server IP")
 	flag.StringVar(&ffmpegFlag, "ffmpeg-path", cfg.FfmpegPath, "Explicit path to the ffmpeg binary")
 	flag.StringVar(&uploadDir, "upload-folder", cfg.UploadFolder, "Name of the uploads inbox folder")
-	flag.BoolVar(&httpOnly, "http-only", envBool("HTTP_ONLY", cfg.HTTPOnly), "Serve plain HTTP instead of self-signed HTTPS")
+	// On a fresh Windows desktop install (no config yet) default to plain
+	// HTTP: the native window loads over loopback (127.0.0.1), which browsers
+	// treat as a secure context, so there's no "Not Secure" warning and no
+	// self-signed-cert prompt. Once a config exists the stored value (and the
+	// Settings "Use HTTPS" toggle) wins, same as every other platform.
+	httpOnlyDefault := cfg.HTTPOnly
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
+			httpOnlyDefault = true
+		}
+	}
+	flag.BoolVar(&httpOnly, "http-only", envBool("HTTP_ONLY", httpOnlyDefault), "Serve plain HTTP instead of self-signed HTTPS")
 	flag.BoolVar(&autoSort, "auto-sort", envBool("AUTO_SORT", cfg.AutoSort), "Auto-file inbox uploads into Year/Month folders")
 	// Deprecated: trash is always <photoDir>/_Trash now. Accepted-but-ignored so
 	// an existing scheduled task that still passes -trash-dir won't fail to start.
@@ -3609,6 +3620,13 @@ func main() {
 		netURL = u
 	}
 
+	// windowURL is what the native desktop window (and the already-running
+	// "show" ping) loads: always loopback, never the LAN IP. Browsers treat
+	// 127.0.0.1 as a secure context even over plain HTTP, so the in-window UI
+	// shows no "Not Secure" warning — unlike netURL, which points at the LAN
+	// address for sharing/QR and would trip the warning in the window.
+	windowURL := scheme + "://127.0.0.1:" + port
+
 	// Start server in background
 	go func() {
 		if useHTTPS {
@@ -3645,7 +3663,10 @@ func main() {
 	// show its window instead. Everywhere else this is a no-op (true).
 	if !acquireSingleInstanceLock() {
 		log.Println("PhotoShare is already running — asking it to show its window")
-		http.Get(netURL + "/api/show")
+		// Loopback + skip-verify so this works whether the running instance
+		// serves plain HTTP or self-signed HTTPS.
+		c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+		c.Get(windowURL + "/api/show")
 		return
 	}
 
@@ -3653,6 +3674,8 @@ func main() {
 	// WebView2 window and the tray icon and returns when the user quits; on
 	// every other platform it's a stub that just blocks forever (equivalent
 	// to the old bare `select {}`), so Linux/Docker behavior is unchanged.
+	// The window loads loopback (no "Not Secure"); the tray uses the LAN URL
+	// for its share/copy actions.
 	go startTray(netURL)
-	runGUI(netURL)
+	runGUI(windowURL)
 }
