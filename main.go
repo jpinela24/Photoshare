@@ -213,6 +213,31 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// isLocalRequest reports whether r originated from this machine — either
+// true loopback (127.0.0.1/::1) or one of this machine's own LAN IPs (the
+// Windows desktop app's native window/tray navigate to the LAN address
+// rather than localhost, so loopback alone isn't enough to recognize it as
+// local). Used to restrict the unauthenticated setup endpoints (filesystem
+// browsing + onboarding) to the machine running PhotoShare, so a remote
+// device on the same network can't race to claim the admin account or
+// enumerate directories before first-run setup completes.
+func isLocalRequest(r *http.Request) bool {
+	host := clientIP(r)
+	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if ipNet, ok := a.(*net.IPNet); ok && ipNet.IP.String() == host {
+			return true
+		}
+	}
+	return false
+}
+
 // locked reports whether the IP is currently locked out.
 func (g *loginGuard) locked(ip string) bool {
 	g.mu.Lock()
@@ -585,17 +610,31 @@ const updateRepo = "jpinela24/Photoshare"
 
 // GET /api/onboarding-status — {needsSetup} is true when no photo library
 // path has been configured yet (first run on a fresh Windows install).
+// While setup is incomplete this is restricted to local requests (see
+// isLocalRequest) so a remote LAN device can't even learn that the server is
+// unclaimed; once setup is done there's nothing sensitive left to expose.
 func onboardingStatusHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if baseDir == "" && !isLocalRequest(r) {
+		json.NewEncoder(w).Encode(map[string]bool{"needsSetup": false})
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]bool{"needsSetup": baseDir == ""})
 }
 
 // POST /api/onboarding {photoDir, username, password} — first-run setup: only
 // works while no library path is configured. Sets the library path, renames
 // the seeded default admin account to the chosen credentials, and restarts.
+// Restricted to local requests (see isLocalRequest) so a remote device on
+// the same network can't race to claim the admin account before the person
+// sitting at the machine finishes setup.
 func onboardingHandler(w http.ResponseWriter, r *http.Request) {
 	if baseDir != "" {
 		http.Error(w, "setup already completed", http.StatusConflict)
+		return
+	}
+	if !isLocalRequest(r) {
+		http.Error(w, "setup can only be completed from the machine running PhotoShare", http.StatusForbidden)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -1156,11 +1195,21 @@ func trashPurgeAllHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// POST /api/inbox-upload — public upload to the dedicated uploads folder (no auth required)
+// maxUploadBytes caps the total size of a single upload request (form
+// overhead + all files combined). ParseMultipartForm's own size argument
+// only bounds how much of a non-file field is buffered in memory — it does
+// NOT cap how much gets streamed to temp files on disk, so without this any
+// signed-in user (any role, including a guest if guest access is enabled)
+// could keep uploading arbitrarily large files and exhaust disk space.
+const maxUploadBytes = 10 << 30 // 10 GiB per request
+
+// POST /api/inbox-upload — upload to the public uploads inbox (requires a
+// logged-in session of any role, see the protected() wrapper at registration)
 func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 	destDir := filepath.Join(baseDir, uploadDir)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(512 << 20); err != nil {
-		http.Error(w, "parse error: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "upload too large or malformed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	uploaded := 0
@@ -1209,8 +1258,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(512 << 20); err != nil {
-		http.Error(w, "parse error: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "upload too large or malformed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	uploaded := 0
@@ -1945,45 +1995,6 @@ func adminRenameFolderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[ADMIN] renamed folder: %s → %s", full, newFull)
-	w.WriteHeader(http.StatusOK)
-}
-
-// POST /api/folder/delete-confirm  body: {"path":"...","password":"..."}
-// Deletes an empty folder after verifying the admin password directly.
-// Used when the user is not in admin session but confirms with password.
-func folderDeleteConfirmHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
-	var body struct {
-		Path     string `json:"path"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	full, err := safePath(baseDir, body.Path)
-	if err != nil || full == baseDir {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	entries, _ := os.ReadDir(full)
-	visible := 0
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") {
-			visible++
-		}
-	}
-	if visible > 0 {
-		http.Error(w, "folder is not empty", http.StatusConflict)
-		return
-	}
-	if err := os.RemoveAll(full); err != nil {
-		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("[CONFIRM-DELETE] deleted empty folder: %s", full)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -3396,7 +3407,6 @@ func main() {
 	mux.HandleFunc("/api/admin/folder/create", withCORS(adminCreateFolderHandler))
 	mux.HandleFunc("/api/admin/folder/rename", withCORS(adminRenameFolderHandler))
 	mux.HandleFunc("/api/admin/folder/delete", withCORS(adminDeleteFolderHandler))
-	mux.HandleFunc("/api/folder/delete-confirm", withCORS(folderDeleteConfirmHandler))
 	mux.HandleFunc("/api/admin/file/move", withCORS(adminMoveFileHandler))
 	mux.HandleFunc("/api/admin/batch/delete", withCORS(adminBatchDeleteHandler))
 	mux.HandleFunc("/api/admin/batch/copy", withCORS(adminBatchCopyHandler))
@@ -3411,15 +3421,28 @@ func main() {
 	mux.HandleFunc("/api/trash/purge-all", withCORS(trashPurgeAllHandler))
 	// /api/fs/* expose the whole filesystem (not just the library), so they
 	// require an admin session — except during first-run setup, before any
-	// session can exist yet, while baseDir is still unset.
+	// session can exist yet, while baseDir is still unset. During that setup
+	// window they're further restricted to local requests (isLocalRequest)
+	// so a remote device on the LAN can't enumerate the filesystem before
+	// the person at the machine finishes onboarding.
 	mux.HandleFunc("/api/fs/roots", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		if baseDir != "" && !requireAdmin(w, r) {
+		if baseDir == "" {
+			if !isLocalRequest(r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		} else if !requireAdmin(w, r) {
 			return
 		}
 		fsRootsHandler(w, r)
 	}))
 	mux.HandleFunc("/api/fs/browse", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		if baseDir != "" && !requireAdmin(w, r) {
+		if baseDir == "" {
+			if !isLocalRequest(r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		} else if !requireAdmin(w, r) {
 			return
 		}
 		fsBrowseHandler(w, r)

@@ -117,11 +117,6 @@ const MapPinIcon      = (p) => <Svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-
 // Single-click  → play/pause inline in the grid card
 // Double-click  → open full-screen modal
 
-// Auth is now cookie-based: if you're logged in as admin, admin actions just
-// work. Non-admins can't elevate inline, so this returns null (admin controls
-// are hidden for them anyway).
-async function quickAdminLogin() { return null }
-
 // ── Folder action helpers ─────────────────────────────────────────────────────
 
 // Parse drag data — always returns an array of {path, name}
@@ -294,59 +289,6 @@ function VideoCard({ entry, onOpenModal, playingPath, setPlayingPath, focused, o
 const AdminCtx    = createContext({ token: null, onDeleteRequest: () => {} })
 const SelectCtx   = createContext({ selectMode: false, selected: new Set(), toggleSelect: () => {} })
 
-// ── Admin login modal ─────────────────────────────────────────────────────────
-
-function AdminLogin({ onSuccess, onClose }) {
-  const [pw, setPw]       = useState('')
-  const [error, setError] = useState(null)
-  const [busy, setBusy]   = useState(false)
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true); setError(null)
-    try {
-      const r = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pw }),
-      })
-      if (!r.ok) throw new Error('Wrong password')
-      const { token } = await r.json()
-      onSuccess(token)
-    } catch (err) {
-      setError(err.message)
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="adm-overlay" onClick={onClose}>
-      <div className="adm-modal" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon"><LockIcon size={30} /></div>
-        <h2 className="adm-modal-title">Admin Login</h2>
-        <p className="adm-modal-sub">Enter the admin password to enable file management.</p>
-        <form onSubmit={submit} className="adm-form">
-          <input
-            className="adm-input"
-            type="password"
-            placeholder="Password"
-            value={pw}
-            onChange={e => setPw(e.target.value)}
-            autoFocus
-          />
-          {error && <div className="adm-error">{error}</div>}
-          <div className="adm-btns">
-            <button type="button" className="adm-btn" onClick={onClose}>Cancel</button>
-            <button type="submit" className="adm-btn adm-btn-primary" disabled={busy}>
-              {busy ? 'Logging in…' : 'Login'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
 // ── Delete confirmation modal ─────────────────────────────────────────────────
 
 function DeleteConfirm({ entry, onConfirm, onClose }) {
@@ -374,107 +316,6 @@ function DeleteConfirm({ entry, onConfirm, onClose }) {
             {busy ? 'Deleting…' : 'Delete'}
           </button>
         </div>
-      </div>
-    </div>,
-    document.body
-  )
-}
-
-// ── PasswordAction — ask for admin password, then run an async action ─────────
-// onAction(tempToken) should return null on success or an error string.
-
-function PasswordAction({ title, subtitle, onAction, onClose, children }) {
-  const [pw, setPw]       = useState('')
-  const [error, setError] = useState(null)
-  const [busy, setBusy]   = useState(false)
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true); setError(null)
-    // Get a temporary token
-    const lr = await fetch('/api/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pw }),
-    })
-    if (!lr.ok) { setError('Wrong password'); setBusy(false); return }
-    const { token: tempToken } = await lr.json()
-    // Run the caller's action
-    const err = await onAction(tempToken)
-    // Revoke temp token immediately
-    fetch('/api/admin/logout', { method: 'POST', headers: { Authorization: `Bearer ${tempToken}` } }).catch(() => {})
-    if (err) { setError(err); setBusy(false) }
-    else onClose()
-  }
-
-  return ReactDOM.createPortal(
-    <div className="adm-overlay" onClick={onClose}>
-      <div className="adm-modal" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon"><LockIcon size={30} /></div>
-        <h2 className="adm-modal-title">{title}</h2>
-        {subtitle && <p className="adm-confirm-name">{subtitle}</p>}
-        <form onSubmit={submit} className="adm-form">
-          {children}
-          <input className="adm-input" type="password" placeholder="Admin password"
-            value={pw} onChange={e => setPw(e.target.value)} autoFocus={!children} />
-          {error && <div className="adm-error">{error}</div>}
-          <div className="adm-btns">
-            <button type="button" className="adm-btn" onClick={onClose} disabled={busy}>Cancel</button>
-            <button type="submit" className="adm-btn adm-btn-primary" disabled={busy}>
-              {busy ? 'Confirming…' : 'Confirm'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>,
-    document.body
-  )
-}
-
-// ── FolderDeleteConfirm — asks for admin password when not in admin mode ──────
-
-function FolderDeleteConfirm({ entry, onSuccess, onClose }) {
-  const [pw, setPw]       = useState('')
-  const [error, setError] = useState(null)
-  const [busy, setBusy]   = useState(false)
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true); setError(null)
-    const r = await fetch('/api/folder/delete-confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: entry.path, password: pw }),
-    })
-    if (r.ok) { onSuccess(); return }
-    setError(r.status === 401 ? 'Wrong password' : await r.text())
-    setBusy(false)
-  }
-
-  return ReactDOM.createPortal(
-    <div className="adm-overlay" onClick={onClose}>
-      <div className="adm-modal adm-confirm" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon adm-danger-icon"><TrashIcon size={30} /></div>
-        <h2 className="adm-modal-title">Delete Folder?</h2>
-        <p className="adm-confirm-name">{entry.name}</p>
-        <p className="adm-warn">Enter the admin password to confirm.</p>
-        <form onSubmit={submit} className="adm-form">
-          <input
-            className="adm-input"
-            type="password"
-            placeholder="Admin password"
-            value={pw}
-            onChange={e => setPw(e.target.value)}
-            autoFocus
-          />
-          {error && <div className="adm-error">{error}</div>}
-          <div className="adm-btns">
-            <button type="button" className="adm-btn" onClick={onClose} disabled={busy}>Cancel</button>
-            <button type="submit" className="adm-btn adm-btn-danger" disabled={busy}>
-              {busy ? 'Deleting…' : 'Delete'}
-            </button>
-          </div>
-        </form>
       </div>
     </div>,
     document.body
@@ -629,10 +470,6 @@ function SidebarItem({ entry, currentPath, onNavigate, depth, onRefresh, onFileM
   const [newFolderName, setNewFolderName] = useState('')
   const [folderError, setFolderError]             = useState(null)
   const [dragOver, setDragOver]                   = useState(false)
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [pendingAction, setPendingAction]         = useState(null)
-  const [pendingRenameVal, setPendingRenameVal]   = useState('')
-  const [pendingFolderName, setPendingFolderName] = useState('')
   const [folderPath, setFolderPath]   = useState(null)  // {fullPath, smbURL}
   const [openedToast, setOpenedToast] = useState(false)
   const renameRef   = useRef(null)
@@ -696,15 +533,9 @@ function SidebarItem({ entry, currentPath, onNavigate, depth, onRefresh, onFileM
     onRefresh()
   }
 
-  // ── Button click handlers (branch on admin mode) ──
-  const onRenameClick = () => {
-    if (token) { setRenamVal(entry.name); setRenaming(true) }
-    else       { setPendingRenameVal(entry.name); setPendingAction('rename') }
-  }
-  const onCreateClick = () => {
-    if (token) { setExpanded(true); setCreating(true) }
-    else       { setPendingFolderName(''); setPendingAction('create') }
-  }
+  // ── Button click handlers (these buttons only render for admins — see below) ──
+  const onRenameClick = () => { setRenamVal(entry.name); setRenaming(true) }
+  const onCreateClick = () => { setExpanded(true); setCreating(true) }
 
   // ── Drop target ──
   const handleDragOver = (e) => {
@@ -727,16 +558,8 @@ function SidebarItem({ entry, currentPath, onNavigate, depth, onRefresh, onFileM
     await batchMoveDrop(files, entry.path, token, onFileMoved)
   }
 
-  // ── Delete (empty only) ──
-  const handleDeleteClick = () => {
-    if (token) {
-      // Already in admin mode — delete directly
-      submitDelete()
-    } else {
-      // Not in admin mode — ask for password
-      setShowDeleteConfirm(true)
-    }
-  }
+  // ── Delete (empty only — button only renders for admins, see below) ──
+  const handleDeleteClick = () => { submitDelete() }
 
   const submitDelete = async () => {
     setFolderError(null)
@@ -879,71 +702,6 @@ function SidebarItem({ entry, currentPath, onNavigate, depth, onRefresh, onFileM
           document.body
         )
       })()}
-
-      {/* Password confirmation modal for non-admin delete */}
-      {showDeleteConfirm && (
-        <FolderDeleteConfirm
-          entry={entry}
-          onSuccess={() => { setShowDeleteConfirm(false); onRefresh() }}
-          onClose={() => setShowDeleteConfirm(false)}
-        />
-      )}
-
-      {/* Password-gated rename */}
-      {pendingAction === 'rename' && (
-        <PasswordAction
-          title="Rename Folder"
-          subtitle={entry.name}
-          onAction={async (tempToken) => {
-            const name = pendingRenameVal.trim()
-            if (!name || name === entry.name) return null
-            const r = await adminFetch('/api/admin/folder/rename', tempToken, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: entry.path, newName: name }),
-            })
-            if (!r.ok) return await r.text()
-            onRefresh(); return null
-          }}
-          onClose={() => setPendingAction(null)}
-        >
-          {/* Inline name input shown inside modal */}
-          <input
-            className="adm-input"
-            style={{marginBottom: 0}}
-            value={pendingRenameVal}
-            onChange={e => setPendingRenameVal(e.target.value)}
-            placeholder="New folder name"
-          />
-        </PasswordAction>
-      )}
-
-      {/* Password-gated create subfolder */}
-      {pendingAction === 'create' && (
-        <PasswordAction
-          title="New Subfolder"
-          subtitle={`Inside: ${entry.name}`}
-          onAction={async (tempToken) => {
-            const name = pendingFolderName.trim()
-            if (!name) return null
-            const r = await adminFetch(
-              `/api/admin/folder/create?path=${encodeURIComponent(entry.path)}&name=${encodeURIComponent(name)}`,
-              tempToken, { method: 'POST' }
-            )
-            if (!r.ok) return await r.text()
-            setExpanded(true); setChildren(null); onRefresh(); return null
-          }}
-          onClose={() => setPendingAction(null)}
-        >
-          <input
-            className="adm-input"
-            style={{marginBottom: 0}}
-            value={pendingFolderName}
-            onChange={e => setPendingFolderName(e.target.value)}
-            placeholder="Folder name"
-          />
-        </PasswordAction>
-      )}
 
       {/* Children + new folder input */}
       {expanded && (
@@ -1252,12 +1010,12 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         </div>
       )}
 
-      {/* Thumbnail regen button */}
-      <button className="thumb-regen-btn" title="Clear and rebuild all thumbnails" onClick={async () => {
-        const tok = token || await quickAdminLogin()
-        if (!tok) return
-        await adminFetch('/api/thumbs/clear', tok, { method: 'POST' })
-      }}><RefreshIcon size={13} /> Rebuild Thumbnails</button>
+      {/* Thumbnail regen button — admin only */}
+      {token && (
+        <button className="thumb-regen-btn" title="Clear and rebuild all thumbnails" onClick={async () => {
+          await adminFetch('/api/thumbs/clear', token, { method: 'POST' })
+        }}><RefreshIcon size={13} /> Rebuild Thumbnails</button>
+      )}
 
       {/* Search results */}
       {query.trim() ? (
@@ -1478,7 +1236,6 @@ function DuplicatesView() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [status, setStatus]     = useState(null)
-  const [pendingFile, setPendingFile] = useState(null)
 
   const scan = () => {
     setLoading(true); setData(null); setError(null)
@@ -1502,10 +1259,7 @@ function DuplicatesView() {
     setTimeout(() => setStatus(null), 2000)
   }
 
-  const trash = (file) => {
-    if (token) doDelete(file, token)
-    else setPendingFile(file)
-  }
+  const trash = (file) => doDelete(file, token)
 
   return (
     <div className="trash-view">
@@ -1528,15 +1282,6 @@ function DuplicatesView() {
         <div className="status muted">✓ No exact duplicates found.</div>
       )}
 
-      {pendingFile && (
-        <PasswordAction
-          title="Delete Duplicate"
-          subtitle={pendingFile.name}
-          onAction={async (tok) => { await doDelete(pendingFile, tok); setPendingFile(null); return null }}
-          onClose={() => setPendingFile(null)}
-        />
-      )}
-
       {!loading && !error && data?.groups?.map(group => (
         <div key={group.hash} className="dup-group">
           <div className="dup-group-header">
@@ -1557,7 +1302,7 @@ function DuplicatesView() {
                   <div className="dup-path"><FolderIcon size={11} /> {file.path.split('/').slice(0, -1).join('/') || 'root'}</div>
                   <div className="dup-date"><CalendarIcon size={11} /> {file.mod}</div>
                 </div>
-                {i !== 0 && (
+                {i !== 0 && token && (
                   <button className="trash-btn-purge" onClick={() => trash(file)}><TrashIcon size={14} /> Delete</button>
                 )}
               </div>
@@ -1630,7 +1375,6 @@ function TrashView() {
   const [items, setItems]             = useState([])
   const [loading, setLoading]         = useState(true)
   const [status, setStatus]           = useState(null)
-  const [pendingAction, setPending]   = useState(null)
   const [showEmptyConfirm, setShowEmptyConfirm] = useState(false)
 
   const load = () => {
@@ -1663,35 +1407,24 @@ function TrashView() {
 
   const handle = (action) => {
     if (action.type === 'purge-all') {
-      // Always show the countdown warning first, regardless of admin status
+      // Always show the countdown warning first
       setShowEmptyConfirm(true)
       return
     }
-    if (token) {
-      runAction(token, action)
-    } else {
-      setPending(action)
-    }
+    runAction(token, action)
   }
 
   const handleEmptyConfirmed = () => {
     setShowEmptyConfirm(false)
-    if (token) {
-      runAction(token, { type: 'purge-all' })
-    } else {
-      setPending({ type: 'purge-all' })
-    }
+    runAction(token, { type: 'purge-all' })
   }
-
-  const actionTitle = (type) => type === 'restore' ? 'Restore File' : type === 'purge' ? 'Delete Permanently' : 'Empty Trash'
-  const actionSubtitle = (action) => action.item?.name || 'All items in trash'
 
   return (
     <div className="trash-view">
       <div className="trash-header">
         <span className="trash-title"><TrashIcon size={16} /> Recycle Bin</span>
         <span className="trash-count">{items.length} item{items.length !== 1 ? 's' : ''}</span>
-        {items.length > 0 && (
+        {token && items.length > 0 && (
           <button className="trash-empty-btn" onClick={() => handle({ type: 'purge-all' })}>
             Empty Trash
           </button>
@@ -1722,10 +1455,12 @@ function TrashView() {
                 {item.size > 0    && <div className="trash-date"><HardDriveIcon size={11} /> {fmtBytes(item.size)}</div>}
               </div>
 
-              <div className="trash-actions">
-                <button className="trash-btn-restore" onClick={() => handle({ type: 'restore', item })}><RestoreIcon size={14} /> Restore</button>
-                <button className="trash-btn-purge"   onClick={() => handle({ type: 'purge',   item })}><TrashIcon size={14} /> Delete</button>
-              </div>
+              {token && (
+                <div className="trash-actions">
+                  <button className="trash-btn-restore" onClick={() => handle({ type: 'restore', item })}><RestoreIcon size={14} /> Restore</button>
+                  <button className="trash-btn-purge"   onClick={() => handle({ type: 'purge',   item })}><TrashIcon size={14} /> Delete</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1736,16 +1471,6 @@ function TrashView() {
         <EmptyTrashConfirm
           onConfirm={handleEmptyConfirmed}
           onClose={() => setShowEmptyConfirm(false)}
-        />
-      )}
-
-      {/* Password prompt when not in admin mode */}
-      {pendingAction && (
-        <PasswordAction
-          title={actionTitle(pendingAction.type)}
-          subtitle={actionSubtitle(pendingAction)}
-          onAction={async (tempToken) => { await runAction(tempToken, pendingAction); return null }}
-          onClose={() => setPending(null)}
         />
       )}
     </div>
@@ -1759,7 +1484,6 @@ function BatchRenameModal({ paths, onClose, onDone, adminToken }) {
   const [start, setStart]     = useState(1)
   const [padding, setPadding] = useState(3)
   const [busy, setBusy]       = useState(false)
-  const [pendingPw, setPendingPw] = useState(false)
 
   const preview = paths.slice(0, 4).map((p, i) => {
     const base = p.split('/').pop()
@@ -1784,12 +1508,10 @@ function BatchRenameModal({ paths, onClose, onDone, adminToken }) {
 
   const submit = () => {
     if (adminToken) execute(adminToken)
-    else setPendingPw(true)
   }
 
   return (
-    <>
-      <div className="adm-overlay" onClick={onClose}>
+    <div className="adm-overlay" onClick={onClose}>
         <div className="adm-modal" style={{width:440}} onClick={e => e.stopPropagation()}>
           <div className="adm-modal-icon"><PencilIcon size={30} /></div>
           <h2 className="adm-modal-title">Batch Rename</h2>
@@ -1826,21 +1548,12 @@ function BatchRenameModal({ paths, onClose, onDone, adminToken }) {
 
           <div className="adm-btns" style={{marginTop:14}}>
             <button className="adm-btn" onClick={onClose} disabled={busy}>Cancel</button>
-            <button className="adm-btn adm-btn-primary" onClick={submit} disabled={busy}>
+            <button className="adm-btn adm-btn-primary" onClick={submit} disabled={busy || !adminToken}>
               {busy ? 'Renaming…' : 'Rename'}
             </button>
           </div>
         </div>
-      </div>
-      {pendingPw && (
-        <PasswordAction
-          title="Batch Rename"
-          subtitle={`${paths.length} files`}
-          onAction={async (tok) => { await execute(tok); return null }}
-          onClose={() => setPendingPw(false)}
-        />
-      )}
-    </>
+    </div>
   )
 }
 
