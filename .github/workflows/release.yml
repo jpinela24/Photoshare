@@ -34,6 +34,7 @@ jobs:
           npm run build
 
       - name: Embed exe icon + version metadata
+        shell: bash # PowerShell mangles the -icon=… native arg on Windows runners
         run: go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon=windows/icon.ico -o=resource_windows_amd64.syso windows/versioninfo.json
 
       - name: Build photoshare.exe
