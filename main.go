@@ -650,7 +650,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.4.4"
+const appVersion = "2.5.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -925,16 +925,30 @@ func latestRelease() (*githubRelease, error) {
 	return &rel, nil
 }
 
+// installerAssetURL picks the .exe installer matching the running CPU
+// architecture. Releases ship two: PhotoShareSetup.exe (x64) and
+// PhotoShareSetup-arm64.exe — the ARM one is named with "arm64", the x64 one
+// isn't, so we match on that. Falls back to any .exe if there's no exact
+// arch match (e.g. an older release that only had the x64 build).
 func installerAssetURL(rel *githubRelease) string {
 	if rel == nil {
 		return ""
 	}
+	wantArm := runtime.GOARCH == "arm64"
+	var fallback string
 	for _, a := range rel.Assets {
-		if strings.HasSuffix(strings.ToLower(a.Name), ".exe") {
-			return a.BrowserDownloadURL
+		n := strings.ToLower(a.Name)
+		if !strings.HasSuffix(n, ".exe") {
+			continue
+		}
+		if strings.Contains(n, "arm64") == wantArm {
+			return a.BrowserDownloadURL // exact arch match
+		}
+		if fallback == "" {
+			fallback = a.BrowserDownloadURL
 		}
 	}
-	return ""
+	return fallback
 }
 
 func downloadAndRunInstaller(url string) error {

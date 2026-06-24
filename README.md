@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.4.4** · Linux / Docker · Windows
+**Current version: v2.5.0** · Linux / Docker · Windows
 
 ---
 
@@ -113,7 +113,9 @@ PhotoShare also ships as a native Windows desktop app: a system tray icon,
 its own window (no browser tab), and an installer like any other Windows
 program — no Docker required.
 
-1. Download and run **PhotoShareSetup.exe** (built from `windows/installer.iss`).
+1. Download and run **PhotoShareSetup.exe** (Intel/AMD x64). On a Windows 11
+   ARM device (Snapdragon etc.) grab **PhotoShareSetup-arm64.exe** for a
+   native build — the x64 one also runs there via emulation if you prefer.
 2. On first launch, pick your photo library folder and create the admin
    account right in the app — no config file editing needed.
 3. PhotoShare lives in the system tray; closing the window just hides it.
@@ -128,11 +130,15 @@ never touches your photos.
 ### Building the Windows installer yourself
 
 ```bash
-make build-windows                 # builds the React app + photoshare.exe
+make build-windows                 # x64: builds the React app + photoshare.exe
 iscc windows\installer.iss         # requires Inno Setup (https://jrsoftware.org/isinfo.php)
+
+make build-windows-arm64           # ARM64 build instead
+iscc /DAppArch=arm64 /DSetupName=PhotoShareSetup-arm64 windows\installer.iss
 ```
 
-The compiled installer lands in `windows/Output/PhotoShareSetup.exe`.
+The compiled installer lands in `windows/Output/PhotoShareSetup.exe` (or
+`PhotoShareSetup-arm64.exe`).
 Re-running it for a later version updates the binary in place and keeps your
 existing library path and accounts.
 
@@ -182,6 +188,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.4.2** | New brand logo throughout — browser tab favicon, PWA/home-screen icon, Windows tray + taskbar icon, and the login/onboarding screens all use the real PhotoShare mark |
 | **2.4.3** | The logo is now embedded in the Windows `.exe` itself (multi-size icon + version metadata), so it shows in Explorer, Add/Remove Programs, and the app's file properties — not just at runtime |
 | **2.4.4** | Start Menu and desktop shortcuts now carry the logo explicitly (the installer ships `icon.ico` and points the shortcuts at it), fixing the generic shortcut icon |
+| **2.5.0** | Native **Windows 11 ARM64** build — a separate `PhotoShareSetup-arm64.exe`, with the in-app updater auto-picking the installer matching your CPU (the x64 build still runs on ARM via emulation if you prefer) |
 
 ---
 

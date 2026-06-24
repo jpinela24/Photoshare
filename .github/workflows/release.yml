@@ -16,6 +16,17 @@ permissions:
 jobs:
   windows-installer:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            gvflags: "-64"            # goversioninfo: 64-bit x86
+            innoarch: x64
+            setupname: PhotoShareSetup
+          - goarch: arm64
+            gvflags: "-arm -64"       # goversioninfo: ARM64
+            innoarch: arm64
+            setupname: PhotoShareSetup-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -35,23 +46,23 @@ jobs:
 
       - name: Embed exe icon + version metadata
         shell: bash # PowerShell mangles the -icon=… native arg on Windows runners
-        run: go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon=windows/icon.ico -o=resource_windows_amd64.syso windows/versioninfo.json
+        run: go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 ${{ matrix.gvflags }} -icon=windows/icon.ico -o=resource_windows_${{ matrix.goarch }}.syso windows/versioninfo.json
 
       - name: Build photoshare.exe
         env:
           GOOS: windows
-          GOARCH: amd64
+          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: go build -ldflags "-H windowsgui -s -w" -o photoshare.exe .
 
       - name: Compile installer (Inno Setup)
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows\installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppArch=${{ matrix.innoarch }} /DSetupName=${{ matrix.setupname }} windows\installer.iss
 
       - name: Attach installer to release
         uses: softprops/action-gh-release@v2
         with:
-          files: windows/Output/PhotoShareSetup.exe
+          files: windows/Output/${{ matrix.setupname }}.exe
 
   docker-image:
     runs-on: ubuntu-latest

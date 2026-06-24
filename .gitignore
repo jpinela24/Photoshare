@@ -15,5 +15,6 @@ key.pem
 .DS_Store
 *.log
 
-# Generated Windows resource (rebuilt from windows/icon.ico + versioninfo.json)
+# Generated Windows resources (rebuilt from windows/icon.ico + versioninfo.json)
 resource_windows_amd64.syso
+resource_windows_arm64.syso
