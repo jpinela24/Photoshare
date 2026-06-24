@@ -7,7 +7,7 @@
 ; place; config/data stays in %APPDATA%\PhotoShare, untouched by the install.
 
 #define MyAppName "PhotoShare"
-#define MyAppVersion "2.4.3"
+#define MyAppVersion "2.4.4"
 #define MyAppPublisher "jpinela24"
 #define MyAppURL "https://github.com/jpinela24"
 #define MyAppExeName "photoshare.exe"
@@ -28,7 +28,7 @@ OutputBaseFilename=PhotoShareSetup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\icon.ico
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 
@@ -42,11 +42,15 @@ Name: "firewall"; Description: "Allow PhotoShare through the Windows Firewall (n
 [Files]
 ; Built by `make build-windows` from the repo root before compiling this script.
 Source: "..\photoshare.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Ship the icon alongside the exe so shortcuts can point at a real .ico file
+; (more reliable than relying on the exe's embedded icon, and a reinstall
+; rewrites the .lnk so Windows refreshes its cached shortcut icon).
+Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""PhotoShare"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes"; \
