@@ -2152,7 +2152,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.4.1'
+const APP_VERSION = '2.4.2'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2217,7 +2217,7 @@ function OnboardingPage() {
   return (
     <div className="adm-overlay" style={{position:'fixed'}}>
       <div className="adm-modal settings-modal" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon"><LibraryIcon size={30} /></div>
+        <div className="adm-modal-icon"><img src="/logo.png" alt="" width={48} height={48} /></div>
         <h2 className="adm-modal-title">Welcome to PhotoShare</h2>
         <p className="adm-modal-sub">Pick your photo library folder and create the admin account.</p>
         <div className="settings-grid">
@@ -2288,7 +2288,7 @@ function LoginPage({ guestAccess, onLogin }) {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={e => { e.preventDefault(); doLogin({ username, password }) }}>
-        <div className="login-logo"><CameraIcon size={40} /></div>
+        <div className="login-logo"><img src="/logo.png" alt="" width={64} height={64} /></div>
         <h1 className="login-title">PhotoShare</h1>
         <p className="login-sub">Sign in to continue</p>
         <input className="adm-input" placeholder="Username" autoFocus autoComplete="username"

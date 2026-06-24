@@ -650,7 +650,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.4.1"
+const appVersion = "2.4.2"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1407,19 +1407,50 @@ func appIcon(size int) *image.NRGBA {
 	return img
 }
 
-// appIconPNG renders appIcon to PNG bytes — used by the Windows tray/window
-// icon, which needs a file on disk rather than an HTTP response.
+var (
+	logoOnce   sync.Once
+	logoMaster image.Image
+)
+
+// loadLogoMaster decodes the embedded brand logo once. The transparent PNG
+// lives at client/public/logo.png and is bundled into client/dist by Vite,
+// so it's already part of the embedded client FS. Returns nil if it's somehow
+// missing, letting callers fall back to the drawn glyph.
+func loadLogoMaster() image.Image {
+	logoOnce.Do(func() {
+		data, err := clientDist.ReadFile("client/dist/logo.png")
+		if err != nil {
+			return
+		}
+		if img, err := png.Decode(bytes.NewReader(data)); err == nil {
+			logoMaster = img
+		}
+	})
+	return logoMaster
+}
+
+// brandIcon returns the PhotoShare logo resized to size×size, falling back to
+// the drawn glyph (appIcon) if the embedded logo can't be loaded.
+func brandIcon(size int) image.Image {
+	if m := loadLogoMaster(); m != nil {
+		return imaging.Resize(m, size, size, imaging.Lanczos)
+	}
+	return appIcon(size)
+}
+
+// appIconPNG renders the brand icon to PNG bytes — used by the Windows
+// tray/window icon, which needs a file on disk rather than an HTTP response.
 func appIconPNG(size int) []byte {
 	var buf bytes.Buffer
-	png.Encode(&buf, appIcon(size))
+	png.Encode(&buf, brandIcon(size))
 	return buf.Bytes()
 }
 
-// servePWAIcon generates a simple PNG icon at the given size
+// servePWAIcon serves the brand icon (PWA manifest / apple-touch) at the size.
 func servePWAIcon(w http.ResponseWriter, size int) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	png.Encode(w, appIcon(size))
+	png.Encode(w, brandIcon(size))
 }
 
 // GET /api/open-folder?path=
