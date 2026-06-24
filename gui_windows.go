@@ -74,6 +74,7 @@ func runGUI(url string) {
 		rootHwnd = root
 		interceptWMClose(root)
 		applyWindowIcon(root)
+		applyDarkTitleBar(root)
 		restoreWindowGeometry(root)
 	})
 
@@ -176,6 +177,29 @@ func applyWindowIcon(hwnd uintptr) {
 	procSetClassLongPtr.Call(hwnd, gclpHiconsm, hicon)
 }
 
+// applyDarkTitleBar makes the native Win32 title bar dark so it matches the
+// app's dark UI instead of showing the default light caption. Two DWM calls,
+// both no-ops (harmlessly ignored) on Windows versions that don't support
+// them:
+//   - immersive dark mode → light caption text + dark min/max/close buttons
+//     (Win10 2004+/Win11; attribute was 19 on early Win10 builds, 20 since).
+//   - caption color → paint the bar the app's exact header color #202124
+//     (Win11 22H2+).
+func applyDarkTitleBar(hwnd uintptr) {
+	enabled := int32(1)
+	// Try the modern attribute (20); fall back to the pre-20H1 value (19).
+	ret, _, _ := procDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkMode,
+		uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled))
+	if ret != 0 {
+		procDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkModeOld,
+			uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled))
+	}
+	// COLORREF is 0x00BBGGRR; app header #202124 → R=20 G=21 B=24.
+	caption := uint32(0x00242120)
+	procDwmSetWindowAttribute.Call(hwnd, dwmwaCaptionColor,
+		uintptr(unsafe.Pointer(&caption)), unsafe.Sizeof(caption))
+}
+
 // acquireSingleInstanceLock claims a named OS mutex so only one PhotoShare
 // process can run at a time. Returns false if another instance already holds
 // it, in which case the caller should back off rather than start a second
@@ -274,6 +298,11 @@ const (
 
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+
+	// DWM window attributes for the dark title bar.
+	dwmwaUseImmersiveDarkModeOld = 19 // DWMWA_USE_IMMERSIVE_DARK_MODE (pre-20H1)
+	dwmwaUseImmersiveDarkMode    = 20 // DWMWA_USE_IMMERSIVE_DARK_MODE (20H1+)
+	dwmwaCaptionColor            = 35 // DWMWA_CAPTION_COLOR (Win11 22H2+)
 )
 
 var (
@@ -291,6 +320,9 @@ var (
 
 	modKernel32     = windows.NewLazySystemDLL("kernel32.dll")
 	procCreateMutex = modKernel32.NewProc("CreateMutexW")
+
+	modDwmapi                 = windows.NewLazySystemDLL("dwmapi.dll")
+	procDwmSetWindowAttribute = modDwmapi.NewProc("DwmSetWindowAttribute")
 
 	origWndProc uintptr
 )

@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.5.0** · Linux / Docker · Windows
+**Current version: v2.5.1** · Linux / Docker · Windows
 
 ---
 
@@ -189,6 +189,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.4.3** | The logo is now embedded in the Windows `.exe` itself (multi-size icon + version metadata), so it shows in Explorer, Add/Remove Programs, and the app's file properties — not just at runtime |
 | **2.4.4** | Start Menu and desktop shortcuts now carry the logo explicitly (the installer ships `icon.ico` and points the shortcuts at it), fixing the generic shortcut icon |
 | **2.5.0** | Native **Windows 11 ARM64** build — a separate `PhotoShareSetup-arm64.exe`, with the in-app updater auto-picking the installer matching your CPU (the x64 build still runs on ARM via emulation if you prefer) |
+| **2.5.1** | The Windows window's native title bar is now dark to match the app, instead of the default light caption |
 
 ---
 
