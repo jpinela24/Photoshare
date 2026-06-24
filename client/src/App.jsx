@@ -1898,10 +1898,12 @@ function SettingsModal({ adminToken, onClose }) {
                 <span className="settings-label-head"><FilmIcon size={13} /> FFmpeg Path (optional)</span>
                 <input className="adm-input" value={cfg.ffmpegPath||''} onChange={e => set('ffmpegPath', e.target.value)} placeholder="/usr/bin/ffmpeg (auto-detected)" />
               </label>
-              <label className="settings-label settings-check">
-                <input type="checkbox" checked={!cfg.httpOnly} onChange={e => set('httpOnly', !e.target.checked)} />
-                <span className="settings-label-head"><LockIcon size={13} /> Use HTTPS (uncheck to drop the “Not Secure” warning on your LAN)</span>
-              </label>
+              {!isWindows && (
+                <label className="settings-label settings-check">
+                  <input type="checkbox" checked={!cfg.httpOnly} onChange={e => set('httpOnly', !e.target.checked)} />
+                  <span className="settings-label-head"><LockIcon size={13} /> Use HTTPS (uncheck to drop the “Not Secure” warning on your LAN)</span>
+                </label>
+              )}
               <label className="settings-label settings-check">
                 <input type="checkbox" checked={!!cfg.autoSortUploads} onChange={e => set('autoSortUploads', e.target.checked)} />
                 <span className="settings-label-head"><CalendarIcon size={13} /> Auto-sort uploads into Year/Month folders by date</span>
@@ -2150,7 +2152,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.4'
+const APP_VERSION = '2.4.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

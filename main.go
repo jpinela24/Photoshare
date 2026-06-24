@@ -650,7 +650,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.4"
+const appVersion = "2.4.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3291,23 +3291,25 @@ func main() {
 	flag.StringVar(&serverIPFlag, "server-ip", envOr("SERVER_IP", cfg.ServerIP), "Override the server IP")
 	flag.StringVar(&ffmpegFlag, "ffmpeg-path", cfg.FfmpegPath, "Explicit path to the ffmpeg binary")
 	flag.StringVar(&uploadDir, "upload-folder", cfg.UploadFolder, "Name of the uploads inbox folder")
-	// On a fresh Windows desktop install (no config yet) default to plain
-	// HTTP: the native window loads over loopback (127.0.0.1), which browsers
-	// treat as a secure context, so there's no "Not Secure" warning and no
-	// self-signed-cert prompt. Once a config exists the stored value (and the
-	// Settings "Use HTTPS" toggle) wins, same as every other platform.
-	httpOnlyDefault := cfg.HTTPOnly
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
-			httpOnlyDefault = true
-		}
-	}
-	flag.BoolVar(&httpOnly, "http-only", envBool("HTTP_ONLY", httpOnlyDefault), "Serve plain HTTP instead of self-signed HTTPS")
+	flag.BoolVar(&httpOnly, "http-only", envBool("HTTP_ONLY", cfg.HTTPOnly), "Serve plain HTTP instead of self-signed HTTPS")
 	flag.BoolVar(&autoSort, "auto-sort", envBool("AUTO_SORT", cfg.AutoSort), "Auto-file inbox uploads into Year/Month folders")
 	// Deprecated: trash is always <photoDir>/_Trash now. Accepted-but-ignored so
 	// an existing scheduled task that still passes -trash-dir won't fail to start.
 	flag.String("trash-dir", "", "deprecated — ignored (trash is always <photoDir>/_Trash)")
 	flag.Parse()
+
+	// The Windows desktop app always serves plain HTTP. Its native window loads
+	// over loopback (127.0.0.1), which browsers treat as a secure context — so
+	// no "Not Secure" warning. Self-signed HTTPS would only break this: the
+	// WebView2 window can't trust the cert and shows a NET::ERR_CERT_AUTHORITY_
+	// INVALID interstitial, while LAN clients still see "not secure" anyway
+	// (the cert isn't trusted on their devices either). Real TLS belongs in a
+	// reverse proxy in front (the Docker path), not the desktop build — so we
+	// force HTTP here regardless of config/flag/env. The Settings "Use HTTPS"
+	// toggle is hidden on Windows to match (see SettingsModal).
+	if runtime.GOOS == "windows" {
+		httpOnly = true
+	}
 
 	// Load accounts and migrate the legacy single admin password into a user.
 	users = append([]User(nil), cfg.Users...)

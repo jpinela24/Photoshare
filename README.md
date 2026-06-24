@@ -8,7 +8,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.4** · Linux / Docker · Windows
+**Current version: v2.4.1** · Linux / Docker · Windows
 
 ---
 
@@ -173,7 +173,8 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.1** | Google Photos / Material restyle — tight grid, image-only photo tiles, blue accent, dark + light |
 | **2.2** | HEIC via libheif; on-the-fly HEVC→H.264 transcode with explicit MIME (plays everywhere); cinematic folder transitions; `PUBLIC_PORT`/`PUBLIC_URL` for correct QR; real disk-space stats; hidden housekeeping folders; **Docker/Linux only** |
 | **2.3** | Windows support is back, done properly this time: native installer, system tray, WebView2 window, in-app first-run setup (pick your library folder + create the admin account with no config editing), opt-in login autostart, in-app update check |
-| **2.4** | Tray icon no longer lingers as a "ghost" after quitting or uninstalling — the tray watches the app's process and disposes itself the moment it's gone (quit, crash, Task Manager, or uninstall); `loadConfig` no longer resurrects default values into an existing config; Settings warns when the admin account still uses a default password |
+| **2.4** | Tray icon no longer lingers as a "ghost" after quitting or uninstalling — the tray watches the app's process and disposes itself the moment it's gone (quit, crash, Task Manager, or uninstall); `loadConfig` no longer resurrects default values into an existing config; Settings warns when the admin account still uses a default password; Windows window loads loopback (no "Not Secure"), blocks browser zoom/reload, and remembers its size/position |
+| **2.4.1** | Windows desktop app now always serves plain HTTP — fixes the `NET::ERR_CERT_AUTHORITY_INVALID` screen that appeared in the window when an older config had self-signed HTTPS enabled (the "Use HTTPS" toggle is hidden on Windows, since real TLS belongs in a reverse proxy, not the desktop build) |
 
 ---
 
