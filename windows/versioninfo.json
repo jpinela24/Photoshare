@@ -1,0 +1,25 @@
+{
+  "FixedFileInfo": {
+    "FileVersion":    { "Major": 2, "Minor": 4, "Patch": 3, "Build": 0 },
+    "ProductVersion": { "Major": 2, "Minor": 4, "Patch": 3, "Build": 0 },
+    "FileFlagsMask": "3f",
+    "FileFlags": "00",
+    "FileOS": "040004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "CompanyName": "jpinela24",
+    "FileDescription": "PhotoShare — self-hosted photo & video library",
+    "InternalName": "photoshare",
+    "LegalCopyright": "PhotoShare",
+    "OriginalFilename": "photoshare.exe",
+    "ProductName": "PhotoShare",
+    "ProductVersion": "2.4.3",
+    "FileVersion": "2.4.3"
+  },
+  "VarFileInfo": {
+    "Translation": { "LangID": "0409", "CharsetID": "04B0" }
+  },
+  "IconPath": "windows/icon.ico"
+}

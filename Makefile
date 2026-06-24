@@ -23,6 +23,10 @@ docker:
 build-windows:
 	cd client && npm install && npm run build
 	go mod tidy
+	# Embed the exe icon + version metadata (Explorer, taskbar, Add/Remove
+	# Programs). The .syso is named *_windows_amd64 so only Windows builds
+	# link it; regenerated here so it always matches the current icon/version.
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon=windows/icon.ico -o=resource_windows_amd64.syso windows/versioninfo.json
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o photoshare.exe .
 
 clean:

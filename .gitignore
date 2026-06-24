@@ -14,3 +14,6 @@ key.pem
 # OS / editor clutter
 .DS_Store
 *.log
+
+# Generated Windows resource (rebuilt from windows/icon.ico + versioninfo.json)
+resource_windows_amd64.syso
