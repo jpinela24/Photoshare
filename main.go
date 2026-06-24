@@ -650,7 +650,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.5.1"
+const appVersion = "2.5.2"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3707,8 +3707,12 @@ func main() {
 	go dateIndexer()
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
-	// show its window instead. Everywhere else this is a no-op (true).
-	if !acquireSingleInstanceLock() {
+	// show its window instead. Everywhere else this is a no-op (true). The
+	// exception is a self-relaunch (restartProcess sets PHOTOSHARE_RESTART):
+	// the old instance is on its way out, so proceed even if its mutex hasn't
+	// been reaped yet — otherwise a setup/settings save would exit into
+	// nothing and the user would have to relaunch by hand.
+	if !acquireSingleInstanceLock() && os.Getenv("PHOTOSHARE_RESTART") == "" {
 		log.Println("PhotoShare is already running — asking it to show its window")
 		// Loopback + skip-verify so this works whether the running instance
 		// serves plain HTTP or self-signed HTTPS.

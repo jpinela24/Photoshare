@@ -204,6 +204,8 @@ func applyDarkTitleBar(hwnd uintptr) {
 // process can run at a time. Returns false if another instance already holds
 // it, in which case the caller should back off rather than start a second
 // server/window/tray.
+var singleInstanceMutex windows.Handle
+
 func acquireSingleInstanceLock() bool {
 	namePtr, err := windows.UTF16PtrFromString(`Local\PhotoShareSingleInstanceMutex`)
 	if err != nil {
@@ -213,23 +215,46 @@ func acquireSingleInstanceLock() bool {
 	if h == 0 {
 		return true
 	}
+	singleInstanceMutex = windows.Handle(h)
 	return windows.GetLastError() != windows.ERROR_ALREADY_EXISTS
 }
 
-// restartProcess re-execs the binary with the same arguments, then exits —
-// there's no supervisor on Windows to bring the process back up like Docker
-// or systemd, so PhotoShare has to relaunch itself after a settings/setup
-// save. The old tray icon cleans itself up once this process exits (its
-// watchdog notices the PID is gone and disposes the icon), and the relaunched
-// instance spawns a fresh tray, so no manual teardown is needed here.
+// releaseSingleInstanceLock closes our handle to the named mutex. When this
+// is the only handle, the mutex is destroyed immediately, so a relaunched
+// copy can claim it right away instead of seeing it as "already running".
+func releaseSingleInstanceLock() {
+	if singleInstanceMutex != 0 {
+		windows.CloseHandle(singleInstanceMutex)
+		singleInstanceMutex = 0
+	}
+}
+
+// restartProcess re-execs the binary, then exits — there's no supervisor on
+// Windows to bring the process back up like Docker or systemd, so PhotoShare
+// relaunches itself after a settings/setup save. The old tray icon cleans
+// itself up once this process exits (its watchdog notices the PID is gone),
+// and the relaunched instance spawns a fresh tray.
+//
+// Two things make the handoff reliable: we release the single-instance mutex
+// *before* spawning the child (so it doesn't see us as a running instance and
+// immediately back off — the bug that left nothing running after first-run
+// setup), and we tag the child with PHOTOSHARE_RESTART so it skips the
+// already-running check even if the mutex lingers a moment. If the spawn
+// fails we reclaim the lock and keep running rather than exiting into nothing.
 func restartProcess() {
 	exe, err := os.Executable()
 	if err != nil {
 		os.Exit(0)
 	}
+	releaseSingleInstanceLock()
 	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), "PHOTOSHARE_RESTART=1")
 	suppressConsoleWindow(cmd)
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Println("restart: relaunch failed, keeping current instance:", err)
+		acquireSingleInstanceLock() // reclaim so we remain the single instance
+		return
+	}
 	os.Exit(0)
 }
 
