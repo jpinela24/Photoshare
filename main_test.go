@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -15,8 +16,12 @@ import (
 
 func TestLoadConfigFreshFileUsesDefaults(t *testing.T) {
 	cfg := loadConfig(filepath.Join(t.TempDir(), "does-not-exist.json"))
-	if cfg.AdminPass != "123456" || cfg.Port != "8080" {
+	if cfg.Port != "8080" || cfg.UploadFolder != "_Uploads" {
 		t.Errorf("fresh-file defaults = %+v, want defaultConfig() values", cfg)
+	}
+	// Must never carry a fixed default password — that's seeded randomly now.
+	if cfg.AdminPass != "" {
+		t.Errorf("defaultConfig seeds AdminPass=%q, want empty (no fixed default)", cfg.AdminPass)
 	}
 }
 
@@ -208,5 +213,130 @@ func TestOnboardingStatusHandlerHidesNeedsSetupFromRemote(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&body2)
 	if !body2.NeedsSetup {
 		t.Error("needsSetup = false for a local request during setup, want true")
+	}
+}
+
+// ── Path boundaries ──────────────────────────────────────────────────────────
+
+func TestSafePath(t *testing.T) {
+	base := t.TempDir()
+	// safePath confines everything to base: traversal is neutralized (the
+	// input is anchored at base and cleaned), not necessarily errored. The
+	// security property is that the result can never escape base — verify
+	// that for ordinary paths and for traversal attempts alike.
+	inputs := []string{
+		"", ".", "a/b.jpg", "sub/dir", "weird name.png",
+		"../escape", "../../etc/passwd", "sub/../../out", "/etc/passwd",
+	}
+	for _, rel := range inputs {
+		full, err := safePath(base, rel)
+		if err != nil {
+			continue // rejecting outright is also acceptable
+		}
+		if full != base && !strings.HasPrefix(full, base+string(filepath.Separator)) {
+			t.Errorf("safePath(%q) = %q, escaped base %q", rel, full, base)
+		}
+	}
+}
+
+func TestIsSafeFilename(t *testing.T) {
+	good := []string{"photo.jpg", "Vacation_001.png", "a b c.mov", "café.heic"}
+	for _, n := range good {
+		if !isSafeFilename(n) {
+			t.Errorf("isSafeFilename(%q) = false, want true", n)
+		}
+	}
+	bad := []string{"", ".", "..", "a/b.jpg", `a\b.jpg`, "../x", "x/../y",
+		"a:b.jpg", "q?.png", "p*.png", "le\x00gal.jpg", `na"me.jpg`}
+	for _, n := range bad {
+		if isSafeFilename(n) {
+			t.Errorf("isSafeFilename(%q) = true, want false", n)
+		}
+	}
+}
+
+// trashRestoreHandler must not restore outside the library even with a
+// crafted originalPath — safePath confines it inside baseDir instead.
+func TestTrashRestoreConfinedToLibrary(t *testing.T) {
+	prevBase, prevTrash := baseDir, trashDir
+	baseDir = t.TempDir()
+	trashDir = filepath.Join(baseDir, "_Trash")
+	os.MkdirAll(trashDir, 0755)
+	defer func() { baseDir, trashDir = prevBase, prevTrash }()
+
+	// A real trashed file to attempt to restore.
+	os.WriteFile(filepath.Join(trashDir, "evil.jpg"), []byte("x"), 0644)
+
+	// Admin session so we get past requireAdmin to the path logic.
+	usersMu.Lock()
+	prevUsers := users
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.DefaultCost)
+	users = []User{{Username: "admin", PassHash: string(hash), Role: "admin"}}
+	usersMu.Unlock()
+	defer func() { usersMu.Lock(); users = prevUsers; usersMu.Unlock() }()
+	tok := sessions.create("admin", "admin")
+
+	body := `{"name":"evil.jpg","originalPath":"../../escape.jpg"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/trash/restore", strings.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	trashRestoreHandler(w, req)
+
+	// The key property: nothing is ever written ABOVE the library, no matter
+	// what originalPath says (it gets confined to baseDir instead).
+	if _, err := os.Stat(filepath.Join(filepath.Dir(baseDir), "escape.jpg")); err == nil {
+		t.Error("restore escaped the library — file written outside baseDir")
+	}
+}
+
+// ── Authorization ────────────────────────────────────────────────────────────
+
+func TestRequireAdminRejectsViewer(t *testing.T) {
+	usersMu.Lock()
+	prevUsers := users
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.DefaultCost)
+	users = []User{{Username: "viewer", PassHash: string(hash), Role: "viewer"}}
+	usersMu.Unlock()
+	defer func() { usersMu.Lock(); users = prevUsers; usersMu.Unlock() }()
+	tok := sessions.create("viewer", "viewer")
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	if requireAdmin(w, req) {
+		t.Error("requireAdmin allowed a viewer, want rejected")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a viewer", w.Code)
+	}
+
+	// No session at all → 401.
+	w2 := httptest.NewRecorder()
+	if requireAdmin(w2, httptest.NewRequest(http.MethodGet, "/x", nil)) {
+		t.Error("requireAdmin allowed an unauthenticated request, want rejected")
+	}
+	if w2.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 with no session", w2.Code)
+	}
+}
+
+// /api/quit must be local-only + POST so a remote client can't stop the app.
+func TestQuitHandlerRejectsRemoteAndGet(t *testing.T) {
+	// Remote POST → forbidden.
+	req := httptest.NewRequest(http.MethodPost, "/api/quit", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	w := httptest.NewRecorder()
+	quitHandler(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("remote quit status = %d, want 403", w.Code)
+	}
+
+	// Local GET → forbidden (wrong method).
+	req2 := httptest.NewRequest(http.MethodGet, "/api/quit", nil)
+	req2.RemoteAddr = "127.0.0.1:5555"
+	w2 := httptest.NewRecorder()
+	quitHandler(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("local GET quit status = %d, want 403", w2.Code)
 	}
 }

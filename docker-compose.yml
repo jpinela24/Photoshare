@@ -12,9 +12,12 @@ services:
       DATA_DIR: /config         # where config/log/cert persist
       PORT: "8080"
       HTTP_ONLY: "true"         # plain HTTP (nginx reverse proxy in front for TLS)
-      # First-run admin account (ignored once accounts exist — change in Settings):
+      # First-run admin account (ignored once accounts exist — change in Settings).
+      # Set ADMIN_PASSWORD to your own value before first start. If you leave it
+      # unset, a random password is generated and printed once to `docker logs
+      # photoshare` — log in with that, then change it. Don't ship a weak default.
       ADMIN_USER: admin
-      ADMIN_PASSWORD: change-me
+      # ADMIN_PASSWORD: "choose-a-strong-password"
       # Host LAN IP + published port so QR codes / "open on network" links are correct:
       SERVER_IP: "10.0.0.20"
       PUBLIC_PORT: "8088"

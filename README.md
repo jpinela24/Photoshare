@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.5.2** · Linux / Docker · Windows
+**Current version: v2.6.0** · Linux / Docker · Windows
 
 ---
 
@@ -84,7 +84,7 @@ initial `ADMIN_PASSWORD`. Config persists in `./photoshare-config` (`/config`).
 | `DATA_DIR` | Where config/cert persist | `/config` |
 | `PORT` | Listen port inside the container | `8080` |
 | `HTTP_ONLY` | Plain HTTP (put a reverse proxy in front for TLS) | `true` |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | First-run admin account (ignored once accounts exist) | `admin` / — |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | First-run admin account (ignored once accounts exist). If `ADMIN_PASSWORD` is unset, a random one is generated and printed once to the logs | `admin` / random |
 | `SERVER_IP` | Host LAN IP for correct QR / network links | auto |
 | `PUBLIC_PORT` | Published host port for QR / share links (if different from `PORT`) | = `PORT` |
 | `PUBLIC_URL` | Full override for the advertised URL (wins over the above) | — |
@@ -191,6 +191,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.5.0** | Native **Windows 11 ARM64** build — a separate `PhotoShareSetup-arm64.exe`, with the in-app updater auto-picking the installer matching your CPU (the x64 build still runs on ARM via emulation if you prefer) |
 | **2.5.1** | The Windows window's native title bar is now dark to match the app, instead of the default light caption |
 | **2.5.2** | Fixed the Windows app exiting (and not relaunching) after first-run setup or a settings save — the relaunched copy was tripping the single-instance lock the old process still held; the lock is now released before relaunch |
+| **2.6.0** | Security hardening from an audit: `/api/quit` + `/api/show` are now local-only + POST (no remote shutdown); trash-restore and batch-rename can't write outside the library (path-traversal guards); first-run seeds a **random** admin password instead of a fixed default; updated `golang.org/x/crypto`/`x/image`; `govulncheck` in CI; reproducible `npm ci` builds; added path-boundary + authorization regression tests |
 
 ---
 

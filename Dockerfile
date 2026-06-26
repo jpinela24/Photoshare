@@ -2,7 +2,8 @@
 FROM node:20-alpine AS frontend
 WORKDIR /app/client
 COPY client/package.json client/package-lock.json* ./
-RUN npm install
+# npm ci installs exactly what package-lock.json pins — reproducible builds.
+RUN npm ci
 COPY client/ ./
 RUN npm run build
 

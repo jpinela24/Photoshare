@@ -84,7 +84,7 @@ function Remove-Tray {
 
 function Show-Window {
     try {
-        Invoke-WebRequest "$url/api/show" -UseBasicParsing -TimeoutSec 3 | Out-Null
+        Invoke-WebRequest "$url/api/show" -Method POST -UseBasicParsing -TimeoutSec 3 | Out-Null
     } catch {
         Start-Process $url
     }
@@ -120,7 +120,7 @@ $cm.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 $mQuit = New-Object System.Windows.Forms.ToolStripMenuItem('Quit PhotoShare')
 $mQuit.add_Click({
-    try { Invoke-WebRequest "$url/api/quit" -UseBasicParsing -TimeoutSec 2 | Out-Null } catch {}
+    try { Invoke-WebRequest "$url/api/quit" -Method POST -UseBasicParsing -TimeoutSec 2 | Out-Null } catch {}
     Remove-Tray
 })
 $cm.Items.Add($mQuit) | Out-Null

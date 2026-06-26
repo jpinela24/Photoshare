@@ -26,7 +26,11 @@ jobs:
       - name: Build React client
         working-directory: client
         run: |
-          npm install
+          npm ci
           npm run build
       - run: go vet ./...
       - run: go test ./...
+      # Reachable-vulnerability scan of the dependency tree. Fails the build
+      # only on vulns actually called from our code, not merely-old versions.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

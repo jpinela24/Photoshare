@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -97,9 +98,21 @@ func defaultConfig() AppConfig {
 	return AppConfig{
 		PhotoDir:     `D:\MEMORIES`,
 		Port:         "8080",
-		AdminPass:    "123456",
 		UploadFolder: "_Uploads",
 	}
+}
+
+// randomPassword returns a URL-safe random password for seeding a first-run
+// admin account when the operator didn't supply one — far safer than a known
+// fixed default. It's logged once so it can be read from the startup output.
+func randomPassword() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failing is exceptional; fall back to a time-seeded value
+		// so we still never seed a *fixed*, publicly-known password.
+		return fmt.Sprintf("ps-%d", time.Now().UnixNano())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func loadConfig(path string) AppConfig {
@@ -475,6 +488,28 @@ func safePath(base, rel string) (string, error) {
 	return full, nil
 }
 
+// isSafeFilename reports whether name is a single, ordinary filename — no path
+// separators, no "."/"..", no control characters, and none of the characters
+// Windows forbids in a name (<>:"/\|?*). Used to keep user-supplied names
+// (e.g. batch-rename patterns) from turning into directory traversal.
+func isSafeFilename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if name != filepath.Base(name) {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || strings.ContainsRune(`<>:"|?*`, r) {
+			return false
+		}
+	}
+	return true
+}
+
 func withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -650,7 +685,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.5.2"
+const appVersion = "2.6.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -833,13 +868,25 @@ func autostartHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/show — restores/focuses the native window (tray "Open" item).
+// Local-only + POST: it's invoked by the on-machine tray, never by a remote
+// client, so there's no reason to expose it across the network.
 func showHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !isLocalRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	showWindow()
 	w.Write([]byte("ok"))
 }
 
-// POST /api/quit — gracefully exits (tray "Quit" item).
+// POST /api/quit — gracefully exits (tray "Quit" item). Local-only + POST:
+// stopping the server is a same-machine action; without this gate any client
+// that can reach the app could shut it down (a trivial DoS).
 func quitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !isLocalRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	w.Write([]byte("bye"))
 	go func() {
 		time.Sleep(200 * time.Millisecond)
@@ -1190,10 +1237,17 @@ func trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine destination
+	// Determine destination — always resolve through safePath so a crafted
+	// originalPath (e.g. "../../etc/cron.d/x") can't restore a file outside
+	// the photo library.
 	var dest string
 	if body.OriginalPath != "" {
-		dest = filepath.Join(baseDir, filepath.FromSlash(body.OriginalPath))
+		d, err := safePath(baseDir, filepath.FromSlash(body.OriginalPath))
+		if err != nil {
+			http.Error(w, "invalid restore path", http.StatusBadRequest)
+			return
+		}
+		dest = d
 	} else {
 		// Strip timestamp prefix (e.g. 20240603_141523_filename.jpg → filename.jpg)
 		name := body.Name
@@ -1201,7 +1255,7 @@ func trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 3 {
 			name = parts[2]
 		}
-		dest = filepath.Join(baseDir, name)
+		dest = filepath.Join(baseDir, filepath.Base(name))
 	}
 
 	// Ensure destination directory exists
@@ -2272,7 +2326,19 @@ func adminBatchRenameHandler(w http.ResponseWriter, r *http.Request) {
 		newName := strings.ReplaceAll(body.Pattern, "{n}", numStr)
 		newName = strings.ReplaceAll(newName, "{name}", origName)
 		newName += ext
+		// The new name must be a single filename — never a path. Reject any
+		// separator, "..", or characters illegal in a filename so a pattern
+		// can't move files across directories or out of the library.
+		if !isSafeFilename(newName) {
+			errs = append(errs, rel+": invalid characters in new name")
+			continue
+		}
 		newFull := filepath.Join(filepath.Dir(full), newName)
+		// Belt-and-suspenders: confirm the result is still inside the library.
+		if rel2, err := filepath.Rel(baseDir, newFull); err != nil || strings.HasPrefix(rel2, "..") {
+			errs = append(errs, rel+": target escapes the library")
+			continue
+		}
 		if _, err := os.Stat(newFull); err == nil {
 			errs = append(errs, rel+": target name already exists")
 			continue
@@ -3381,11 +3447,16 @@ func main() {
 	usersChanged := false
 	if len(users) == 0 {
 		// First run / upgrade from single-password mode: seed an admin account.
-		if legacyHash == "" {
-			legacyHash, _ = hashPassword("123456")
-			log.Printf("WARNING: no admin password configured — defaulting to admin/123456; change it in Settings")
-		}
+		// If the operator gave no password (no -admin-password, no
+		// ADMIN_PASSWORD, no stored hash), generate a random one and print it
+		// once — never seed a fixed, publicly-known default.
 		adminUser := envOr("ADMIN_USER", "admin")
+		if legacyHash == "" {
+			pw := randomPassword()
+			legacyHash, _ = hashPassword(pw)
+			log.Printf("WARNING: no admin password configured — generated one for %q: %s", adminUser, pw)
+			log.Printf("         Log in with it, then change it in Settings (set ADMIN_PASSWORD to control this).")
+		}
 		users = []User{{Username: adminUser, PassHash: legacyHash, Role: "admin"}}
 		usersChanged = true
 		log.Printf("Created default admin account %q", adminUser)
@@ -3717,7 +3788,7 @@ func main() {
 		// Loopback + skip-verify so this works whether the running instance
 		// serves plain HTTP or self-signed HTTPS.
 		c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-		c.Get(windowURL + "/api/show")
+		c.Post(windowURL+"/api/show", "text/plain", nil)
 		return
 	}
 
