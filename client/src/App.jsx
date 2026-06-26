@@ -1916,30 +1916,39 @@ function SettingsModal({ adminToken, onClose }) {
               )}
             </div>
 
-            {isWindows && (
-              <div className="settings-grid" style={{marginTop:10}}>
-                <div className="settings-label">
-                  <span className="settings-label-head">Updates</span>
-                  {!updateInfo && (
-                    <button className="adm-btn" type="button" onClick={checkUpdate} disabled={updateBusy}>
-                      {updateBusy ? 'Checking…' : 'Check for updates'}
-                    </button>
-                  )}
-                  {updateInfo && updateInfo.error && <p className="adm-error">{updateInfo.error}</p>}
-                  {updateInfo && !updateInfo.error && !updateInfo.available && (
-                    <p className="adm-modal-sub">You're up to date (v{updateInfo.current}).</p>
-                  )}
-                  {updateInfo && updateInfo.available && (
-                    <div>
-                      <p className="adm-modal-sub">v{updateInfo.latest} is available (you have v{updateInfo.current}).</p>
+            {/* Updates — available on every platform. Windows can download +
+                install the matching installer; elsewhere (Docker/Linux) it
+                just reports whether a newer release exists, since those update
+                via `git pull && docker compose up -d --build`. */}
+            <div className="settings-grid" style={{marginTop:10}}>
+              <div className="settings-label">
+                <span className="settings-label-head">Updates</span>
+                {!updateInfo && (
+                  <button className="adm-btn" type="button" onClick={checkUpdate} disabled={updateBusy}>
+                    {updateBusy ? 'Checking…' : 'Check for updates'}
+                  </button>
+                )}
+                {updateInfo && updateInfo.error && <p className="adm-error">{updateInfo.error}</p>}
+                {updateInfo && !updateInfo.error && !updateInfo.available && (
+                  <p className="adm-modal-sub">You're up to date (v{updateInfo.current}).</p>
+                )}
+                {updateInfo && updateInfo.available && (
+                  <div>
+                    <p className="adm-modal-sub">v{updateInfo.latest} is available (you have v{updateInfo.current}).</p>
+                    {isWindows ? (
                       <button className="adm-btn adm-btn-primary" type="button" onClick={runUpdate} disabled={updateBusy}>
                         {updateBusy ? 'Updating…' : 'Download & install'}
                       </button>
-                    </div>
-                  )}
-                </div>
+                    ) : (
+                      <p className="adm-modal-sub" style={{marginTop:4}}>
+                        Update with <code>git pull &amp;&amp; docker compose up -d --build</code>
+                        {updateInfo.releaseURL && <> · <a href={updateInfo.releaseURL} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>release notes</a></>}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
 
             {error && <div className="adm-error" style={{marginTop:8}}>{error}</div>}
             <p className="adm-warn" style={{marginTop:10}}>⚠ Saving will restart the app.</p>
@@ -2202,7 +2211,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.7.0'
+const APP_VERSION = '2.7.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
