@@ -1531,68 +1531,128 @@ body {
 
 /* ── Folder picker modal ───────────────────────────────────────────────────── */
 
-.fp-modal { max-height: 80vh; display: flex; flex-direction: column; }
+.fp-modal { width: 460px; max-width: 100%; max-height: 82vh; display: flex; flex-direction: column; }
 
-.fp-tree {
-  flex: 1;
-  overflow-y: auto;
-  background: #0a0a0d;
-  border: 1px solid #1e1e26;
-  border-radius: 8px;
-  padding: 6px 0;
-  margin: 8px 0 4px;
-  scrollbar-width: thin;
-  scrollbar-color: #2d2d36 transparent;
-}
-
-.fp-node { display: flex; flex-direction: column; }
-
-.fp-row {
+/* Breadcrumb — current location, click to jump back up */
+.fp-crumbs {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: background 0.1s;
-  border-radius: 0;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 10px 0 8px;
+  font-size: 0.8rem;
 }
-.fp-row:hover { background: #13131a; }
-.fp-active { background: #14142a !important; }
-
-.fp-toggle {
+.fp-crumb-seg { display: inline-flex; align-items: center; gap: 2px; color: var(--gtext-faint); }
+.fp-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: none;
   border: none;
-  color: #52525b;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  padding: 2px;
-  flex-shrink: 0;
-}
-
-.fp-label {
-  flex: 1;
-  font-size: 0.82rem;
-  color: #c4c4c8;
-  white-space: nowrap;
+  color: var(--accent);
+  padding: 3px 7px;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-crumb:hover { background: var(--glass-2); }
+.fp-crumb-active { color: var(--gtext); font-weight: 600; cursor: default; }
+.fp-crumb-active:hover { background: none; }
+
+/* Scrollable list of subfolders in the current location */
+.fp-list {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  background: rgba(0,0,0,0.18);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.fp-pick-btn {
+.fp-empty {
+  padding: 22px 10px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--gtext-faint);
+}
+
+.fp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
   background: none;
-  border: 1px solid #2d2d36;
-  color: #6366f1;
-  font-size: 0.72rem;
-  padding: 2px 8px;
-  border-radius: 4px;
+  border: none;
   cursor: pointer;
-  flex-shrink: 0;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--gtext);
   transition: background 0.1s;
 }
-.fp-pick-btn:hover { background: #1a1a2e; }
+.fp-item:hover { background: var(--glass-2); }
+.fp-item svg:first-child { color: var(--accent); flex-shrink: 0; }
+.fp-item svg:last-child  { color: var(--gtext-faint); flex-shrink: 0; }
+.fp-item-name {
+  flex: 1;
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-.fp-children { padding-left: 16px; }
+/* Inline "new folder" creation row */
+.fp-new-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+}
+.fp-new-row svg { color: var(--accent); flex-shrink: 0; }
+.fp-new-input { flex: 1; }
+.fp-new-go {
+  flex-shrink: 0;
+  background: var(--accent-strong);
+  border: none;
+  color: #fff;
+  font-size: 0.78rem;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fp-new-go:disabled { opacity: 0.6; cursor: default; }
+
+/* "New folder here" button under the list */
+.fp-newbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 8px;
+  background: var(--glass);
+  border: 1px dashed var(--glass-border-2);
+  color: var(--gtext-dim);
+  font-size: 0.8rem;
+  padding: 7px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.fp-newbtn:hover { background: var(--glass-2); color: var(--accent); border-color: var(--accent); }
+
+.fp-dest {
+  margin-top: 10px;
+  font-size: 0.8rem;
+}
+.fp-dest strong { color: var(--accent); }
 
 /* ── Recycle Bin view ─────────────────────────────────────────────────────── */
 

@@ -1975,40 +1975,6 @@ function SettingsModal({ adminToken, onClose }) {
 
 // ── FolderPicker — choose a destination folder ───────────────────────────────
 
-function FolderPickerNode({ path, label, onPick, selected }) {
-  const [open, setOpen]         = useState(path === null)
-  const [children, setChildren] = useState(null)
-  const isRoot = path === null
-
-  useEffect(() => {
-    if (!open) return
-    fetch(`/api/browse?path=${encodeURIComponent(isRoot ? '' : path)}`)
-      .then(r => r.json())
-      .then(data => setChildren((data || []).filter(e => e.isDir)))
-      .catch(() => setChildren([]))
-  }, [open])
-
-  return (
-    <div className="fp-node">
-      <div className={`fp-row ${selected === path && !isRoot ? 'fp-active' : ''}`}>
-        <button className="fp-toggle" onClick={() => setOpen(v => !v)}>
-          {open ? <ChevronDown /> : <ChevronRight />}
-        </button>
-        <span className="fp-label" onClick={() => !isRoot && onPick(path)}>{label}</span>
-        {!isRoot && (
-          <button className="fp-pick-btn" onClick={() => onPick(path)}>Select</button>
-        )}
-      </div>
-      {open && children && (
-        <div className="fp-children">
-          {children.map(c => (
-            <FolderPickerNode key={c.path} path={c.path} label={c.name} onPick={onPick} selected={selected} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ── LibraryPathPicker — choose the library root itself (any OS path) ────────
 
@@ -2079,25 +2045,109 @@ function LibraryPathPicker({ onConfirm, onClose }) {
   )
 }
 
-function FolderPicker({ title, onConfirm, onClose }) {
-  const [dest, setDest] = useState(null)
+// FolderPicker — a single-pane folder navigator for copy/move. Click a folder
+// to step into it; the breadcrumb walks back up; "New folder here" creates a
+// subfolder in the current location. The destination is wherever you've
+// navigated to, confirmed with "Move/Copy here".
+function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
+  const [cwd, setCwd]         = useState('')     // '' = library root (All Photos)
+  const [folders, setFolders] = useState(null)   // null = loading
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName]   = useState('')
+  const [busy, setBusy]         = useState(false)
+  const [err, setErr]           = useState(null)
+
+  useEffect(() => {
+    setFolders(null); setErr(null)
+    fetch(`/api/browse?path=${encodeURIComponent(cwd)}`)
+      .then(r => r.json())
+      .then(data => setFolders((data || []).filter(e => e.isDir)))
+      .catch(() => setFolders([]))
+  }, [cwd])
+
+  const crumbs = cwd ? cwd.split('/') : []
+
+  const createFolder = async () => {
+    const name = newName.trim()
+    if (!name) { setCreating(false); return }
+    setBusy(true); setErr(null)
+    const r = await adminFetch(
+      `/api/admin/folder/create?path=${encodeURIComponent(cwd)}&name=${encodeURIComponent(name)}`,
+      null, { method: 'POST' }
+    )
+    setBusy(false)
+    if (!r.ok) { setErr((await r.text()) || 'Could not create folder'); return }
+    setCreating(false); setNewName('')
+    setCwd(cwd ? `${cwd}/${name}` : name)   // step into the folder we just made
+  }
+
   return (
     <div className="adm-overlay" onClick={onClose}>
       <div className="adm-modal fp-modal" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon"><OpenFolderIcon size={30} /></div>
         <h2 className="adm-modal-title">{title}</h2>
-        <div className="fp-tree">
-          <FolderPickerNode path={null} label={<><LibraryIcon size={13} /> Root (All Photos)</>} onPick={setDest} selected={dest} />
+
+        {/* Breadcrumb — click any crumb to jump back up */}
+        <div className="fp-crumbs">
+          <button className={`fp-crumb ${cwd === '' ? 'fp-crumb-active' : ''}`} onClick={() => setCwd('')}>
+            <LibraryIcon size={13} /> All Photos
+          </button>
+          {crumbs.map((c, i) => {
+            const p = crumbs.slice(0, i + 1).join('/')
+            return (
+              <span key={p} className="fp-crumb-seg">
+                <ChevronRight />
+                <button className={`fp-crumb ${i === crumbs.length - 1 ? 'fp-crumb-active' : ''}`} onClick={() => setCwd(p)}>{c}</button>
+              </span>
+            )
+          })}
         </div>
-        {dest !== null && (
-          <p className="adm-modal-sub" style={{marginTop:6}}>
-            Destination: <strong style={{color:'#a5b4fc'}}>{dest || '/ root'}</strong>
-          </p>
+
+        {/* Folder list for the current location */}
+        <div className="fp-list">
+          {folders === null && <div className="fp-empty">Loading…</div>}
+          {folders && folders.length === 0 && !creating && <div className="fp-empty">No subfolders here</div>}
+          {folders && folders.map(f => (
+            <button key={f.path} className="fp-item" onClick={() => setCwd(f.path)}>
+              <FolderIcon size={16} />
+              <span className="fp-item-name">{f.name}</span>
+              <ChevronRight />
+            </button>
+          ))}
+          {creating && (
+            <div className="fp-new-row">
+              <FolderIcon size={16} />
+              <input
+                className="adm-input fp-new-input"
+                autoFocus
+                placeholder="Folder name"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') createFolder()
+                  if (e.key === 'Escape') { setCreating(false); setNewName('') }
+                }}
+              />
+              <button className="fp-new-go" onClick={createFolder} disabled={busy}>{busy ? '…' : 'Create'}</button>
+            </div>
+          )}
+        </div>
+
+        {err && <div className="adm-error" style={{marginTop:6}}>{err}</div>}
+
+        {!creating && (
+          <button className="fp-newbtn" onClick={() => setCreating(true)}>
+            <PlusIcon size={14} /> New folder here
+          </button>
         )}
-        <div className="adm-btns" style={{marginTop:12}}>
+
+        <p className="adm-modal-sub fp-dest">
+          Destination: <strong>{cwd ? '/' + cwd : 'All Photos (root)'}</strong>
+        </p>
+
+        <div className="adm-btns" style={{marginTop:10}}>
           <button className="adm-btn" onClick={onClose}>Cancel</button>
-          <button className="adm-btn adm-btn-primary" disabled={dest === null} onClick={() => onConfirm(dest)}>
-            Confirm
+          <button className="adm-btn adm-btn-primary" onClick={() => onConfirm(cwd)}>
+            {confirmLabel || 'Move here'}
           </button>
         </div>
       </div>
@@ -2152,7 +2202,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.6.0'
+const APP_VERSION = '2.7.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2978,6 +3028,7 @@ export default function App() {
       {pickerAction && (
         <FolderPicker
           title={pickerAction === 'copy' ? 'Copy to…' : 'Move to…'}
+          confirmLabel={pickerAction === 'copy' ? 'Copy here' : 'Move here'}
           onConfirm={dest => { setPickerAction(null); batchAction(pickerAction, dest) }}
           onClose={() => setPickerAction(null)}
         />
