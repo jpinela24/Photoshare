@@ -1236,16 +1236,32 @@ function DuplicatesView() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [status, setStatus]     = useState(null)
+  const [progress, setProgress] = useState(null) // {phase, processed, total}
+  const pollRef = useRef(null)
 
-  const scan = () => {
-    setLoading(true); setData(null); setError(null)
-    fetch('/api/duplicates')
+  // The scan runs in the background server-side; we poll for progress so the
+  // request never hangs for minutes on a large library.
+  const fetchState = (rescan) => {
+    fetch('/api/duplicates' + (rescan ? '?rescan=1' : ''))
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
-      .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
+      .then(d => {
+        if (d.error) { stopPoll(); setError(d.error); setLoading(false); return }
+        if (d.scanning) {
+          setProgress({ phase: d.phase, processed: d.processed, total: d.total })
+          setLoading(true)
+          if (!pollRef.current) pollRef.current = setInterval(() => fetchState(false), 1500)
+        } else {
+          stopPoll(); setData(d); setProgress(null); setLoading(false)
+        }
+      })
+      .catch(e => { stopPoll(); setError(e.message); setLoading(false) })
   }
 
-  useEffect(() => { scan() }, [])
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
+
+  const scan = () => { setData(null); setError(null); setProgress(null); setLoading(true); fetchState(true) }
+
+  useEffect(() => { fetchState(false); return stopPoll }, [])
 
   const doDelete = async (file, tok) => {
     await adminFetch(`/api/admin/delete?path=${encodeURIComponent(file.path)}`, tok, { method: 'DELETE' })
@@ -1273,7 +1289,13 @@ function DuplicatesView() {
       {loading && (
         <div className="status">
           <div className="spinner" />
-          <span>Scanning library… this may take a few minutes on large folders.</span>
+          <span>
+            {progress?.phase === 'hashing' && progress.total > 0
+              ? `Comparing files… ${progress.processed} / ${progress.total}`
+              : progress?.phase === 'sampling'
+                ? 'Fingerprinting candidates…'
+                : 'Scanning library… this may take a while on large libraries.'}
+          </span>
         </div>
       )}
 
@@ -2211,7 +2233,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.7.1'
+const APP_VERSION = '2.7.2'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

@@ -685,7 +685,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.7.1"
+const appVersion = "2.7.2"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2437,7 +2437,96 @@ type DuplicateGroup struct {
 	Files []DupFile `json:"files"`
 }
 
+// ── Duplicate finder (async, polled) ─────────────────────────────────────────
+// The scan runs in the background and the handler reports progress, so the
+// request never blocks for minutes (which made the UI hang "Scanning…" forever
+// on large libraries, especially behind a reverse proxy / over Tailscale).
+
+type dupeState struct {
+	mu         sync.Mutex
+	running    bool
+	phase      string // indexing | sampling | hashing | done
+	processed  int    // files full-hashed so far
+	total      int    // full-hash candidates
+	groups     []DuplicateGroup
+	totalWaste int64
+	finishedAt time.Time
+	err        string
+}
+
+var dupes = &dupeState{}
+
+// GET /api/duplicates       — returns current state; starts a scan if none has
+//                             run yet and none is running.
+// GET /api/duplicates?rescan=1 — forces a fresh scan.
 func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
+	rescan := r.URL.Query().Get("rescan") == "1"
+	dupes.mu.Lock()
+	if !dupes.running && (dupes.finishedAt.IsZero() || rescan) {
+		dupes.running = true
+		dupes.phase = "indexing"
+		dupes.processed, dupes.total = 0, 0
+		dupes.groups, dupes.totalWaste, dupes.err = nil, 0, ""
+		go runDuplicateScan()
+	}
+	resp := map[string]any{
+		"scanning":   dupes.running,
+		"phase":      dupes.phase,
+		"processed":  dupes.processed,
+		"total":      dupes.total,
+		"groups":     []DuplicateGroup{},
+		"totalWaste": dupes.totalWaste,
+	}
+	if !dupes.running && dupes.groups != nil {
+		resp["groups"] = dupes.groups
+	}
+	if dupes.err != "" {
+		resp["error"] = dupes.err
+	}
+	dupes.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func runDuplicateScan() {
+	groups, waste := computeDuplicates()
+	dupes.mu.Lock()
+	dupes.running = false
+	dupes.phase = "done"
+	dupes.groups = groups
+	dupes.totalWaste = waste
+	dupes.finishedAt = time.Now()
+	dupes.mu.Unlock()
+}
+
+// sampleHash hashes only the first 64 KiB — a cheap fingerprint to rule out
+// same-size files that obviously differ, without reading whole multi-GB videos.
+func sampleHash(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 64*1024)
+	n, _ := io.ReadFull(f, buf) // short files: n = file size, err = ErrUnexpectedEOF
+	sum := md5.Sum(buf[:n])
+	return fmt.Sprintf("%x", sum)
+}
+
+func fullHash(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func computeDuplicates() ([]DuplicateGroup, int64) {
 	trashLower := strings.ToLower(filepath.Base(trashDir))
 
 	type fileEntry struct {
@@ -2445,7 +2534,7 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 		info os.FileInfo
 	}
 
-	// Pass 1: collect all files grouped by size (no I/O, just stat info)
+	// Pass 1 (index): group by size — stat only, no I/O.
 	bySize := map[int64][]fileEntry{}
 	filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -2472,32 +2561,64 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// Pass 2: only hash files that share a size with at least one other file
+	// Pass 2 (sample): split each size group by a 64 KiB prefix hash. Files
+	// that differ in their first 64 KiB can't be identical, so this avoids
+	// fully reading huge videos that merely happen to share a size.
+	dupes.mu.Lock()
+	dupes.phase = "sampling"
+	dupes.mu.Unlock()
+	bySample := map[string][]fileEntry{} // key: "<size>:<sampleHash>"
+	for sz, files := range bySize {
+		if len(files) < 2 {
+			continue
+		}
+		for _, fe := range files {
+			sh := sampleHash(fe.path)
+			if sh == "" {
+				continue
+			}
+			bySample[fmt.Sprintf("%d:%s", sz, sh)] = append(bySample[fmt.Sprintf("%d:%s", sz, sh)], fe)
+		}
+	}
+
+	// Count the files that still need a full hash, for progress reporting.
+	total := 0
+	for _, files := range bySample {
+		if len(files) >= 2 {
+			total += len(files)
+		}
+	}
+	dupes.mu.Lock()
+	dupes.phase = "hashing"
+	dupes.total = total
+	dupes.processed = 0
+	dupes.mu.Unlock()
+
+	// Pass 3 (confirm): full-hash only the sample-collision candidates.
 	type hashEntry struct {
 		files []DupFile
 		size  int64
 	}
 	hashes := map[string]*hashEntry{}
-	for sz, files := range bySize {
+	for _, files := range bySample {
 		if len(files) < 2 {
-			continue // unique size — can't be a duplicate
+			continue
 		}
 		for _, fe := range files {
-			f, err := os.Open(fe.path)
-			if err != nil {
+			full := fullHash(fe.path)
+			dupes.mu.Lock()
+			dupes.processed++
+			dupes.mu.Unlock()
+			if full == "" {
 				continue
 			}
-			h := md5.New()
-			io.Copy(h, f)
-			f.Close()
-			hash := fmt.Sprintf("%x", h.Sum(nil))
 			rel, _ := filepath.Rel(baseDir, fe.path)
 			rel = filepath.ToSlash(rel)
-			df := DupFile{Path: rel, Name: fe.info.Name(), Size: sz, Mod: fe.info.ModTime().Format("Jan 2, 2006")}
-			if e, ok := hashes[hash]; ok {
+			df := DupFile{Path: rel, Name: fe.info.Name(), Size: fe.info.Size(), Mod: fe.info.ModTime().Format("Jan 2, 2006")}
+			if e, ok := hashes[full]; ok {
 				e.files = append(e.files, df)
 			} else {
-				hashes[hash] = &hashEntry{files: []DupFile{df}, size: sz}
+				hashes[full] = &hashEntry{files: []DupFile{df}, size: fe.info.Size()}
 			}
 		}
 	}
@@ -2515,14 +2636,9 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 		groups = []DuplicateGroup{}
 	}
 
-	log.Printf("[DUPES] scanned %d size-groups, found %d duplicate groups (%s wasted)",
-		len(bySize), len(groups), fmtSizeGo(totalWaste))
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"groups":     groups,
-		"totalWaste": totalWaste,
-	})
+	log.Printf("[DUPES] %d size-groups → %d full-hash candidates → %d dup groups (%s wasted)",
+		len(bySize), total, len(groups), fmtSizeGo(totalWaste))
+	return groups, totalWaste
 }
 
 func fmtSizeGo(b int64) string {
