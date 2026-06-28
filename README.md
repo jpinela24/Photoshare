@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.7.2** · Linux / Docker · Windows
+**Current version: v2.7.3** · Linux / Docker · Windows
 
 ---
 
@@ -195,6 +195,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.7.0** | Redesigned the Copy/Move folder picker into a single-pane navigator — breadcrumb, click a folder to step into it, live destination, and a **"New folder here"** button so you can create a destination on the spot |
 | **2.7.1** | "Check for updates" now shows on every platform, not just Windows — on Docker/browser it reports whether a newer release exists and how to update (`git pull && docker compose up`), with a link to the release notes |
 | **2.7.2** | Fixed the Duplicate Finder hanging on "Scanning library…" forever on large libraries — the scan now runs in the background with live progress (no long blocking request that drops behind a proxy/Tailscale), and only fully hashes files that share both a size and a 64 KiB fingerprint, so it no longer reads gigabytes of unrelated videos |
+| **2.7.3** | Sharper Windows app/shortcut icon — the `.ico` is regenerated with high-quality downscaling + light sharpening at every size, fixing the low-res desktop/Start-Menu icon |
 
 ---
 
