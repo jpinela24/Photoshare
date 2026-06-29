@@ -692,7 +692,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.8.0"
+const appVersion = "2.8.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -795,24 +795,64 @@ type FSEntry struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	IsDir bool   `json:"isDir"`
+	Kind  string `json:"kind,omitempty"` // "quick" | "drive" (roots only)
 }
 
 // GET /api/fs/roots — top-level roots to start browsing from (drive letters
 // on Windows, "/" + home directory elsewhere).
 func fsRootsHandler(w http.ResponseWriter, r *http.Request) {
 	var roots []FSEntry
+
+	// Quick-access known folders (Windows-style: Desktop, Downloads, …) — only
+	// those that actually exist. On Windows these may be OneDrive-redirected,
+	// so each is also looked up under %OneDrive% as a fallback.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		oneDrive := os.Getenv("OneDrive")
+		known := []struct {
+			label string
+			subs  []string
+		}{
+			{"Desktop", []string{"Desktop"}},
+			{"Downloads", []string{"Downloads"}},
+			{"Documents", []string{"Documents"}},
+			{"Pictures", []string{"Pictures"}},
+			{"Videos", []string{"Videos", "Movies"}},
+			{"Music", []string{"Music"}},
+		}
+		isDir := func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
+		for _, k := range known {
+			found := ""
+			for _, sub := range k.subs {
+				if p := filepath.Join(home, sub); isDir(p) {
+					found = p
+					break
+				}
+			}
+			if found == "" && oneDrive != "" {
+				for _, sub := range k.subs {
+					if p := filepath.Join(oneDrive, sub); isDir(p) {
+						found = p
+						break
+					}
+				}
+			}
+			if found != "" {
+				roots = append(roots, FSEntry{Name: k.label, Path: found, IsDir: true, Kind: "quick"})
+			}
+		}
+		roots = append(roots, FSEntry{Name: "Home", Path: home, IsDir: true, Kind: "quick"})
+	}
+
+	// Drives / filesystem roots.
 	if runtime.GOOS == "windows" {
 		for _, letter := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
 			drive := string(letter) + ":\\"
 			if _, err := os.Stat(drive); err == nil {
-				roots = append(roots, FSEntry{Name: drive, Path: drive, IsDir: true})
+				roots = append(roots, FSEntry{Name: drive, Path: drive, IsDir: true, Kind: "drive"})
 			}
 		}
 	} else {
-		roots = append(roots, FSEntry{Name: "/", Path: "/", IsDir: true})
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			roots = append(roots, FSEntry{Name: "Home", Path: home, IsDir: true})
-		}
+		roots = append(roots, FSEntry{Name: "/", Path: "/", IsDir: true, Kind: "drive"})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(roots)

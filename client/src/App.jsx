@@ -2082,6 +2082,15 @@ function FsPickerNode({ path, label, onPick, selected }) {
   )
 }
 
+// Icon for a quick-access / drive root, Windows-Explorer style.
+function rootIcon(r) {
+  if (r.kind === 'drive') return <HardDriveIcon size={14} />
+  if (r.name === 'Pictures') return <ImageIcon size={14} />
+  if (r.name === 'Videos')   return <FilmIcon size={14} />
+  if (r.name === 'Home')     return <HomeIcon size={14} />
+  return <FolderIcon size={14} />
+}
+
 function LibraryPathPicker({ onConfirm, onClose }) {
   const [roots, setRoots] = useState(null)
   const [dest, setDest]   = useState(null)
@@ -2090,20 +2099,28 @@ function LibraryPathPicker({ onConfirm, onClose }) {
     fetch('/api/fs/roots').then(r => r.json()).then(setRoots).catch(() => setRoots([]))
   }, [])
 
+  const quick  = (roots || []).filter(r => r.kind === 'quick')
+  const drives = (roots || []).filter(r => r.kind !== 'quick')
+  const node = r => (
+    <FsPickerNode key={r.path} path={r.path}
+      label={<><span className="fp-rooticon">{rootIcon(r)}</span>{r.name}</>}
+      onPick={setDest} selected={dest} />
+  )
+
   return (
     <div className="adm-overlay" onClick={onClose}>
       <div className="adm-modal fp-modal" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon"><OpenFolderIcon size={30} /></div>
         <h2 className="adm-modal-title">Choose Photo Library Folder</h2>
         <div className="fp-tree">
-          {roots === null && <p className="adm-modal-sub">Loading drives…</p>}
-          {roots && roots.map(r => (
-            <FsPickerNode key={r.path} path={r.path} label={r.name} onPick={setDest} selected={dest} />
-          ))}
+          {roots === null && <p className="adm-modal-sub">Loading…</p>}
+          {quick.length > 0 && <div className="fp-section">Quick access</div>}
+          {quick.map(node)}
+          {drives.length > 0 && <div className="fp-section">{drives[0]?.path === '/' ? 'Locations' : 'This PC'}</div>}
+          {drives.map(node)}
         </div>
         {dest !== null && (
           <p className="adm-modal-sub" style={{marginTop:6}}>
-            Selected: <strong style={{color:'#a5b4fc'}}>{dest}</strong>
+            Selected: <strong style={{color:'var(--accent)'}}>{dest}</strong>
           </p>
         )}
         <div className="adm-btns" style={{marginTop:12}}>
@@ -2274,7 +2291,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.8.0'
+const APP_VERSION = '2.8.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
