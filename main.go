@@ -53,6 +53,7 @@ var (
 	port           string
 	httpOnly       bool   // serve plain HTTP (no cert, no "Not Secure" warning)
 	autoSort       bool   // auto-file inbox uploads into Year/Month folders
+	lanAccess      bool   // serve the web UI on the LAN (false = loopback only)
 
 	usersMu     sync.Mutex
 	users       []User // accounts that can log in
@@ -85,6 +86,11 @@ type AppConfig struct {
 	AutoSort     bool   `json:"autoSortUploads,omitempty"` // file inbox uploads into Year/Month folders by date
 	Users        []User `json:"users,omitempty"`           // login accounts
 	GuestAccess  bool   `json:"guestAccess,omitempty"`     // allow "Continue as guest" (view-only)
+	// DisableWebUI, when true, binds the server to loopback only so the web UI
+	// is reachable only from this machine (the Windows native window still
+	// works); absent/false = reachable on the LAN (the default). Inverted so an
+	// existing config without the key keeps LAN access.
+	DisableWebUI bool `json:"disableWebUI,omitempty"`
 }
 
 // User is a login account. Role is "admin" (full) or "viewer" (view-only).
@@ -637,6 +643,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			PhotoDir: baseDir, Port: port,
 			ShareName: shareName, ServerIP: serverIPFlag,
 			UploadFolder: uploadDir, FfmpegPath: ffmpegFlag, HTTPOnly: httpOnly, AutoSort: autoSort,
+			DisableWebUI: !lanAccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -685,7 +692,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.7.3"
+const appVersion = "2.8.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3538,6 +3545,9 @@ func main() {
 		httpOnly = true
 	}
 
+	// Web UI on the LAN unless explicitly disabled (absent key = enabled).
+	lanAccess = !cfg.DisableWebUI
+
 	// Load accounts and migrate the legacy single admin password into a user.
 	users = append([]User(nil), cfg.Users...)
 	guestAccess = cfg.GuestAccess
@@ -3861,12 +3871,20 @@ func main() {
 	// address for sharing/QR and would trip the warning in the window.
 	windowURL := scheme + "://127.0.0.1:" + port
 
+	// Bind to all interfaces (LAN reachable) unless the web UI is disabled, in
+	// which case bind loopback only — the native window still reaches it.
+	host := ""
+	if !lanAccess {
+		host = "127.0.0.1"
+		log.Printf("Web UI restricted to this machine (loopback only)")
+	}
+
 	// Start server in background
 	go func() {
 		if useHTTPS {
 			log.Printf("Starting HTTPS server on https://localhost:%s", port)
 			srv := &http.Server{
-				Addr:    ":" + port,
+				Addr:    host + ":" + port,
 				Handler: recoverMW(mux),
 				TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 			}
@@ -3875,7 +3893,7 @@ func main() {
 			}
 		} else {
 			log.Printf("Starting HTTP server on http://localhost:%s", port)
-			if err := http.ListenAndServe(":"+port, recoverMW(mux)); err != nil {
+			if err := http.ListenAndServe(host+":"+port, recoverMW(mux)); err != nil {
 				log.Fatal(err)
 			}
 		}
