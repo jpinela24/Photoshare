@@ -692,7 +692,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.8.1"
+const appVersion = "2.9.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3814,6 +3814,8 @@ func main() {
 	mux.HandleFunc("/api/on-this-day", protected(onThisDayHandler))
 	mux.HandleFunc("/api/geo", protected(geoHandler))
 	mux.HandleFunc("/api/search", protected(searchHandler))
+	mux.HandleFunc("/api/search/semantic", protected(semanticSearchHandler))
+	mux.HandleFunc("/api/ai/status", protected(aiStatusHandler))
 	mux.HandleFunc("/api/browse", protected(browseHandler))
 	mux.HandleFunc("/api/meta", protected(metaHandler))
 	mux.HandleFunc("/api/folder-info", protected(folderInfoHandler))
@@ -3950,6 +3952,9 @@ func main() {
 
 	// Build the "On This Day" date index in the background
 	go dateIndexer()
+
+	// AI semantic search — starts a background embedder only if ML_URL is set.
+	aiInit()
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
 	// show its window instead. Everywhere else this is a no-op (true). The

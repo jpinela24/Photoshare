@@ -848,6 +848,8 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
   const [searchFrom, setSearchFrom] = useState('')
   const [searchTo, setSearchTo]     = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  const [ai, setAi] = useState(null)                  // /api/ai/status, null until known
+  const [smart, setSmart] = useState(false)           // AI (semantic) search on/off
   const [creatingRoot, setCreatingRoot] = useState(false)
   const [rootFolderName, setRootFolderName] = useState('')
   const [rootError, setRootError] = useState(null)
@@ -901,6 +903,24 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
 
   useEffect(() => { if (creatingRoot) rootInputRef.current?.focus() }, [creatingRoot])
 
+  // AI status — poll while indexing so the progress readout stays live. When AI
+  // isn't configured/healthy the Smart toggle simply never appears.
+  useEffect(() => {
+    let stop = false
+    const tick = () => {
+      fetch('/api/ai/status')
+        .then(r => r.json())
+        .then(s => { if (!stop) setAi(s) })
+        .catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => { stop = true; clearInterval(id) }
+  }, [])
+  const aiReady = ai?.enabled && ai?.healthy
+  // Don't leave Smart stuck on if AI goes away.
+  useEffect(() => { if (!aiReady && smart) setSmart(false) }, [aiReady, smart])
+
   const submitRootCreate = async () => {
     const name = rootFolderName.trim()
     if (!name) { setCreatingRoot(false); return }
@@ -915,24 +935,32 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
     refresh()
   }
 
-  // Debounced search
+  // Debounced search. Smart (semantic) mode hits the AI endpoint by meaning;
+  // it has no filename/type/date filters, so those apply to normal search only.
   useEffect(() => {
+    const useSmart = smart && aiReady
     const hasFilters = searchType || searchFrom || searchTo
-    if (!query.trim() && !hasFilters) { setResults(null); setSearching(false); return }
+    if (!query.trim() && !(hasFilters && !useSmart)) { setResults(null); setSearching(false); return }
     setSearching(true)
     const t = setTimeout(() => {
-      const params = new URLSearchParams()
-      if (query.trim()) params.set('q', query.trim())
-      if (searchType)   params.set('type', searchType)
-      if (searchFrom)   params.set('from', searchFrom)
-      if (searchTo)     params.set('to', searchTo)
-      fetch(`/api/search?${params}`)
+      let url
+      if (useSmart) {
+        url = `/api/search/semantic?q=${encodeURIComponent(query.trim())}`
+      } else {
+        const params = new URLSearchParams()
+        if (query.trim()) params.set('q', query.trim())
+        if (searchType)   params.set('type', searchType)
+        if (searchFrom)   params.set('from', searchFrom)
+        if (searchTo)     params.set('to', searchTo)
+        url = `/api/search?${params}`
+      }
+      fetch(url)
         .then(r => r.json())
-        .then(data => { setResults(data); setSearching(false) })
+        .then(data => { setResults(Array.isArray(data) ? data : []); setSearching(false) })
         .catch(() => setSearching(false))
     }, 300)
     return () => clearTimeout(t)
-  }, [query, searchType, searchFrom, searchTo])
+  }, [query, searchType, searchFrom, searchTo, smart, aiReady])
 
   const clearSearch = () => { setQuery(''); setSearchType(''); setSearchFrom(''); setSearchTo(''); setResults(null); setShowFilters(false); inputRef.current?.focus() }
 
@@ -978,10 +1006,22 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
           ref={inputRef}
           className="search-input"
           type="text"
-          placeholder="Search files…"
+          placeholder={smart ? 'Search by what’s in your photos…' : 'Search files…'}
           value={query}
           onChange={e => setQuery(e.target.value)}
         />
+        {aiReady && (
+          <button
+            className="search-clear"
+            title={smart ? 'Smart search on — matches by image content' : 'Smart search — find photos by what they show'}
+            onClick={() => setSmart(v => !v)}
+            style={{ color: smart ? '#818cf8' : undefined, display: 'flex', alignItems: 'center' }}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill={smart ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />
+            </svg>
+          </button>
+        )}
         <button
           className="search-clear"
           title="Filters"
@@ -997,8 +1037,17 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         )}
       </div>
 
-      {/* Search filters */}
-      {showFilters && (
+      {/* Smart-search status line: indexing progress or a ready hint. */}
+      {aiReady && smart && (
+        <div className="search-status" style={{ padding: '2px 12px 4px', fontSize: '0.7rem', opacity: 0.75 }}>
+          {ai?.running
+            ? `Indexing photos… ${ai.processed}/${ai.total}`
+            : `Smart search over ${ai?.indexed || 0} photo${ai?.indexed === 1 ? '' : 's'}`}
+        </div>
+      )}
+
+      {/* Search filters (normal search only — semantic search ignores them) */}
+      {showFilters && !smart && (
         <div className="search-filters">
           <select className="sort-select" style={{flex:'1 1 100%', fontSize:'0.75rem'}} value={searchType} onChange={e => setSearchType(e.target.value)}>
             <option value="">All types</option>
@@ -2291,7 +2340,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.8.1'
+const APP_VERSION = '2.9.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

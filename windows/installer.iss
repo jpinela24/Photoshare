@@ -7,7 +7,7 @@
 ; place; config/data stays in %APPDATA%\PhotoShare, untouched by the install.
 
 #define MyAppName "PhotoShare"
-#define MyAppVersion "2.8.1"
+#define MyAppVersion "2.9.0"
 #define MyAppPublisher "jpinela24"
 #define MyAppURL "https://github.com/jpinela24"
 #define MyAppExeName "photoshare.exe"
