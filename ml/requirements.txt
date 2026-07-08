@@ -1,0 +1,7 @@
+# torch (CPU) is installed separately in the Dockerfile from the CPU wheel index
+# so we don't pull the multi-GB CUDA build.
+sentence-transformers>=2.7,<4
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pillow>=10
+python-multipart>=0.0.9

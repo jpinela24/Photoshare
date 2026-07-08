@@ -22,6 +22,11 @@ services:
       SERVER_IP: "10.0.0.20"
       PUBLIC_PORT: "8088"
       # AUTO_SORT: "true"       # auto-file inbox uploads into Year/Month folders
+      # AI semantic search — point at the ML sidecar below. Comment out (or
+      # remove the ml service) to disable AI; the app then behaves as before.
+      ML_URL: "http://photoshare-ml:8090"
+    depends_on:
+      - photoshare-ml
     volumes:
       - /mnt/data/MEMORIES:/photos                            # photo library (1.8T drive)
       # Absolute path — a relative "./photoshare-config" resolves differently
@@ -29,3 +34,15 @@ services:
       # a re-clone into a new folder it silently pointed at an empty config,
       # resetting the admin account back to defaults. Pin it here instead.
       - /home/jpinela/Photoshare/photoshare-config:/config
+
+  # ── AI: CLIP embedding sidecar (local semantic search) ──────────────────────
+  # Python + CLIP on CPU. First build downloads the model (~600 MB) and the
+  # first index pass over a large library takes a while — it runs throttled in
+  # the background. Remove this service (and ML_URL above) to turn AI off.
+  photoshare-ml:
+    build: ./ml
+    container_name: photoshare-ml
+    restart: unless-stopped
+    # Not published on the host — only the photoshare container talks to it.
+    expose:
+      - "8090"
