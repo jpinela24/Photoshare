@@ -3189,3 +3189,76 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .grid-enter, .grid-enter > * { animation: none !important; filter: none !important; }
 }
+
+/* ── People / Faces view ─────────────────────────────────────────────────── */
+.people-view { padding: 4px 0 24px; }
+.people-status,
+.people-empty {
+  color: #71717a;
+  font-size: 0.82rem;
+  padding: 8px 2px 14px;
+}
+.people-empty { padding: 32px 8px; text-align: center; }
+.people-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 2px 14px;
+}
+.people-title { color: #e4e4e7; font-size: 0.95rem; font-weight: 600; }
+
+.people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 16px;
+}
+.person-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.face-thumb {
+  border-radius: 50%;
+  background-repeat: no-repeat;
+  border: 2px solid #26262e;
+  background-color: #131316;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.person-card:hover .face-thumb {
+  border-color: #6366f1;
+  transform: translateY(-2px);
+}
+.person-name {
+  max-width: 100%;
+  font-size: 0.8rem;
+  color: #d4d4d8;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.person-count {
+  font-size: 0.7rem;
+  color: #71717a;
+  margin-top: -3px;
+}
+.person-edit {
+  position: absolute;
+  top: -2px;
+  right: 8px;
+  background: #1e1e24;
+  color: #a1a1aa;
+  border: 1px solid #2d2d36;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.person-card:hover .person-edit { opacity: 1; }
+.person-edit:hover { color: #fff; background: #6366f1; border-color: #6366f1; }

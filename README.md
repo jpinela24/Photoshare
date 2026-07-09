@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.9.0** · Linux / Docker · Windows
+**Current version: v2.10.0** · Linux / Docker · Windows
 
 ---
 
@@ -29,6 +29,8 @@ tray icon and a native window (Windows).
 
 ### Find
 - **Search** by name with **type** (photo/video) and **date** filters.
+- **Smart (AI) search** — find photos by what they show ("beach at sunset"), powered by local CLIP. Optional, fully private, off unless the ML sidecar is enabled.
+- **People** — faces detected and grouped into people you can name and browse. Optional (`FACES=1`), local, and CPU-throttled so it never competes with indexing.
 - **Duplicate finder** — content-hash based.
 - **Storage stats** — library size, counts, and real disk usage.
 - **On This Day** memories — background date index surfaces past photos.
@@ -199,6 +201,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.8.0** | Reorganized Settings into clean **tabs** (General · Sharing · Users · System) instead of one long form. New **"Enable Web UI on your network"** toggle (Windows) — when off, the server binds to loopback only so only this PC can use it while the app window keeps working; on by default |
 | **2.8.1** | Windows-Explorer-style **Quick access** in the library Browse dialog — jump straight to Desktop, Downloads, Documents, Pictures, Videos, Music or Home (OneDrive-aware), with drives under "This PC". Also restyles the picker, which had lost its styling in 2.7.0 |
 | **2.9.0** | **AI semantic search (Phase 1)** — find photos by what they show ("beach at sunset") instead of filenames, powered by local CLIP running in an optional `photoshare-ml` sidecar. Fully private (no cloud) and feature-flagged behind `ML_URL`, so it's off unless enabled. Adds a "Smart" search toggle in the sidebar with live indexing progress |
+| **2.10.0** | **Face recognition — People view (Phase 2)** — detects faces on the same ML sidecar (small `buffalo_s` model), groups them into people you can name and browse, all local. Deliberately low-impact: **off by default** (`FACES=1` to enable), lazy-loaded, and the background detector yields to the semantic-search indexer so the two never compete for CPU |
 
 ---
 

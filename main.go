@@ -692,7 +692,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.9.0"
+const appVersion = "2.10.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3816,6 +3816,10 @@ func main() {
 	mux.HandleFunc("/api/search", protected(searchHandler))
 	mux.HandleFunc("/api/search/semantic", protected(semanticSearchHandler))
 	mux.HandleFunc("/api/ai/status", protected(aiStatusHandler))
+	mux.HandleFunc("/api/faces/status", protected(facesStatusHandler))
+	mux.HandleFunc("/api/faces/people", protected(peopleHandler))
+	mux.HandleFunc("/api/faces/photos", protected(personPhotosHandler))
+	mux.HandleFunc("/api/faces/name", protected(nameFaceHandler))
 	mux.HandleFunc("/api/browse", protected(browseHandler))
 	mux.HandleFunc("/api/meta", protected(metaHandler))
 	mux.HandleFunc("/api/folder-info", protected(folderInfoHandler))
@@ -3955,6 +3959,9 @@ func main() {
 
 	// AI semantic search — starts a background embedder only if ML_URL is set.
 	aiInit()
+	// Face recognition — opt-in (FACES=1); no-op otherwise. Its detector yields
+	// to the CLIP indexer so the two never compete for CPU.
+	faceInit()
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
 	// show its window instead. Everywhere else this is a no-op (true). The

@@ -5,3 +5,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pillow>=10
 python-multipart>=0.0.9
+# Faces (Phase 2). insightface pulls onnxruntime (CPU) for the buffalo_s model.
+insightface>=0.7.3
+onnxruntime>=1.17
+numpy>=1.26
