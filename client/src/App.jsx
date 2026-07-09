@@ -1996,6 +1996,7 @@ function SettingsModal({ adminToken, onClose }) {
   const [autostart, setAutostart]   = useState(false)
   const [updateInfo, setUpdateInfo] = useState(null)
   const [updateBusy, setUpdateBusy] = useState(false)
+  const [aiAvail, setAiAvail]       = useState(false) // ML sidecar configured?
   const [tab, setTab]               = useState('general')
 
   useEffect(() => {
@@ -2003,6 +2004,12 @@ function SettingsModal({ adminToken, onClose }) {
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(setCfg)
       .catch(() => setError('Failed to load settings'))
+  }, [])
+
+  useEffect(() => {
+    // Whether the ML sidecar is configured at all — the faces toggle only makes
+    // sense when it is (faces run on the same sidecar).
+    fetch('/api/ai/status').then(r => r.json()).then(d => setAiAvail(!!d.enabled)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -2165,6 +2172,13 @@ function SettingsModal({ adminToken, onClose }) {
                     <label className="settings-label settings-check">
                       <input type="checkbox" checked={autostart} onChange={e => toggleAutostart(e.target.checked)} />
                       <span className="settings-label-head"><PlugIcon size={13} /> Start PhotoShare when Windows starts</span>
+                    </label>
+                  )}
+                  {aiAvail && (
+                    <label className="settings-label settings-check">
+                      <input type="checkbox" checked={!!cfg.facesEnabled} onChange={e => set('facesEnabled', e.target.checked)} />
+                      <span className="settings-label-head"><PeopleIcon size={13} /> Face recognition (People view)</span>
+                      <span className="settings-hint">Groups photos by the people in them. Runs locally on the AI sidecar; more CPU-intensive than search, so the scan runs throttled in the background.</span>
                     </label>
                   )}
                   <div className="settings-label">
