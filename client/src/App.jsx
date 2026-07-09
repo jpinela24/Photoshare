@@ -225,7 +225,12 @@ function VideoCard({ entry, onOpenModal, playingPath, setPlayingPath, focused, o
     <div
       className={`card card-video ${selSet.has(entry.path) ? 'card-selected' : ''} ${focused ? 'card-grid-focus' : ''}`}
       data-sel-path={entry.path}
-      onClick={selectMode ? (e) => toggleSelect(entry.path, e.shiftKey) : handleClick}
+      onClick={(e) => {
+        onFocus?.()
+        const additive = e.metaKey || e.ctrlKey
+        if (selectMode || additive || e.shiftKey) { e.preventDefault(); toggleSelect(entry.path, { shift: e.shiftKey, additive }); return }
+        handleClick(e)
+      }}
       onMouseEnter={metaEnter}
       onMouseLeave={metaLeave}
       onMouseMove={metaMove}
@@ -1697,7 +1702,12 @@ function PhotoCard({ entry, onOpen, adminToken, selectMode, isSelected, onToggle
     <button
       className={`card card-photo ${isSelected ? 'card-selected' : ''} ${focused ? 'card-grid-focus' : ''}`}
       data-sel-path={entry.path}
-      onClick={(e) => { onFocus?.(); if (selectMode) { onToggle(entry.path, e.shiftKey); return }; onOpen(entry) }}
+      onClick={(e) => {
+        onFocus?.()
+        const additive = e.metaKey || e.ctrlKey
+        if (selectMode || additive || e.shiftKey) { e.preventDefault(); onToggle(entry.path, { shift: e.shiftKey, additive }); return }
+        onOpen(entry)
+      }}
       title={entry.name}
       style={{position:'relative'}}
       draggable={!!adminToken && !selectMode}
@@ -1756,13 +1766,17 @@ function ShortcutsModal({ onClose }) {
   const rows = [
     ['?', 'Show / hide this help'],
     ['← / →', 'Previous / next photo (in viewer)'],
-    ['Arrows', 'Move focus in the grid'],
-    ['Enter / Space', 'Open the focused item'],
-    ['Esc', 'Close viewer or dialog'],
+    ['Arrows', 'Move focus in the grid (↑/↓ jump a row)'],
+    ['Home / End', 'Focus first / last item'],
+    ['Enter', 'Open the focused item / folder'],
+    ['Space', 'Select / deselect the focused item'],
+    ['Backspace', 'Go up one folder'],
+    ['Esc', 'Close viewer, clear selection, or unfocus'],
     ['Alt + ← / →', 'Back / forward through folders'],
-    ['Click', 'In select mode: toggle one item'],
+    ['⌘/Ctrl + Click', 'Add / remove one item from the selection'],
     ['Shift + Click', 'Select a range of items'],
-    ['Drag on empty space', 'Marquee-select (in select mode)'],
+    ['⌘/Ctrl + A', 'Select all photos in this folder'],
+    ['Drag on empty space', 'Marquee-select'],
   ]
   return ReactDOM.createPortal(
     <div className="adm-overlay" onClick={onClose}>
@@ -2310,24 +2324,37 @@ function AddressBar({ path, onNavigate }) {
   }
 
   const parts = path ? path.split('/') : []
+  const parent = parts.slice(0, -1).join('/')
   const segs = [
-    { label: 'All Photos', path: '' },
+    { label: 'All Photos', path: '', root: true },
     ...parts.map((p, i) => ({ label: p, path: parts.slice(0, i + 1).join('/') }))
   ]
 
   return (
     <div className="address-bar">
+      <button
+        className="address-up"
+        disabled={!path}
+        title="Up one level (Backspace)"
+        aria-label="Up one level"
+        onClick={() => onNavigate(parent)}
+      >
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
       <div className="address-crumbs">
         {segs.map((seg, i) => {
           const isLast = i === segs.length - 1
+          const inner = seg.root
+            ? <><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight:4,verticalAlign:'-2px'}}><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>{seg.label}</>
+            : seg.label
           return (
             <span key={seg.path} className="address-crumb-item">
-              {i > 0 && <span className="address-crumb-sep">/</span>}
+              {i > 0 && <span className="address-crumb-sep">›</span>}
               {isLast ? (
-                <span className="address-crumb-current">{seg.label}</span>
+                <span className="address-crumb-current">{inner}</span>
               ) : (
                 <button className="address-crumb-btn" onClick={() => onNavigate(seg.path)}>
-                  {seg.label}
+                  {inner}
                 </button>
               )}
             </span>
@@ -2340,7 +2367,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.10.2'
+const APP_VERSION = '2.11.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2571,6 +2598,12 @@ export default function App() {
   const mainScrollRef = useRef(null)
   const [gridFocus, setGridFocus]                 = useState(null) // index into sortedEntries
 
+  // Keep the keyboard-focused card scrolled into view as arrows move it.
+  useEffect(() => {
+    if (gridFocus == null) return
+    document.querySelector('.card-grid-focus')?.scrollIntoView({ block: 'nearest' })
+  }, [gridFocus])
+
   useEffect(() => {
     fetch('/api/server-info').then(r => r.json())
       .then(d => { if (d.uploadFolder) setUploadFolderName(d.uploadFolder) })
@@ -2580,12 +2613,21 @@ export default function App() {
 
   const orderedSelRef = useRef([])  // selectable paths in display order (for range select)
   const lastSelRef    = useRef(null) // last single-toggled path (range anchor)
-  const toggleSelect = (path, shift) => {
+  // toggleSelect(path, opts) — opts.shift extends a range from the last anchor;
+  // opts (or a bare `true`) otherwise toggles the single item. Any selection
+  // action turns select mode on so the batch toolbar appears (Cmd/Ctrl-click and
+  // Shift-click work without first entering select mode).
+  const toggleSelect = (path, opts = {}) => {
+    const shift = opts === true || !!opts.shift
+    // Capture the range anchor now — the setSelItems updater below is deferred,
+    // and we overwrite lastSelRef synchronously right after, so reading it
+    // inside the updater would see the just-clicked item instead of the anchor.
+    const anchor = lastSelRef.current
     setSelItems(prev => {
       const next = new Set(prev)
-      if (shift && lastSelRef.current) {
+      if (shift && anchor) {
         const order = orderedSelRef.current
-        const a = order.indexOf(lastSelRef.current)
+        const a = order.indexOf(anchor)
         const b = order.indexOf(path)
         if (a !== -1 && b !== -1) {
           const [lo, hi] = a < b ? [a, b] : [b, a]
@@ -2597,6 +2639,7 @@ export default function App() {
       return next
     })
     lastSelRef.current = path
+    setSelectMode(true)
   }
   const clearSelect = () => { setSelItems(new Set()); setSelectMode(false); lastSelRef.current = null }
   const selectAll   = () => setSelItems(new Set(entries.filter(e => !e.isDir).map(e => e.path)))
@@ -2786,25 +2829,66 @@ export default function App() {
     if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); goBack(); return }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); return }
 
+    // Select-all (Cmd/Ctrl+A) when browsing the grid
+    if (!selected && !inInput && (e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+      const media = sortedEntries.filter(x => !x.isDir)
+      if (media.length) { e.preventDefault(); setSelItems(new Set(media.map(x => x.path))); setSelectMode(true) }
+      return
+    }
+
+    // Leave / go up / clear — works even in an empty folder (no entries needed)
+    if (!selected && !inInput && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      if (e.key === 'Backspace' && path) {
+        e.preventDefault()
+        navigate(path.split('/').slice(0, -1).join('/'))
+        setGridFocus(null)
+        return
+      }
+      if (e.key === 'Escape') {
+        if (selItems.size) clearSelect()
+        else setGridFocus(null)
+        return
+      }
+    }
+
     // Grid keyboard navigation (only when no modal, no input focused)
-    if (!selected && !inInput && !e.altKey && sortedEntries.length > 0) {
+    if (!selected && !inInput && !e.altKey && !e.metaKey && !e.ctrlKey && sortedEntries.length > 0) {
       const cur = gridFocus ?? -1
       const total = sortedEntries.length
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault()
-        setGridFocus(Math.min(cur + 1, total - 1))
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault()
-        setGridFocus(Math.max(cur - 1, 0))
-      } else if ((e.key === 'Enter' || e.key === ' ') && gridFocus !== null) {
+      const cols = gridColumns()
+      const move = (to) => { e.preventDefault(); setGridFocus(Math.max(0, Math.min(to, total - 1))) }
+      if (e.key === 'ArrowRight')     { move(cur < 0 ? 0 : cur + 1) }
+      else if (e.key === 'ArrowLeft') { move(cur < 0 ? 0 : cur - 1) }
+      else if (e.key === 'ArrowDown') { move(cur < 0 ? 0 : cur + cols) }
+      else if (e.key === 'ArrowUp')   { move(cur < 0 ? 0 : cur - cols) }
+      else if (e.key === 'Home')      { move(0) }
+      else if (e.key === 'End')       { move(total - 1) }
+      else if (e.key === 'Enter' && gridFocus !== null) {
         e.preventDefault()
         const entry = sortedEntries[gridFocus]
         if (entry.isDir) { navigate(entry.path); setGridFocus(null) }
         else setSelected(entry)
-      } else if (e.key === 'Escape') {
-        setGridFocus(null)
+      } else if (e.key === ' ' && gridFocus !== null) {
+        // Space toggles selection of the focused item (photos/videos only)
+        const entry = sortedEntries[gridFocus]
+        if (!entry.isDir) { e.preventDefault(); toggleSelect(entry.path, {}) }
       }
     }
+  }
+
+  // Number of grid columns in the current layout — measured from the DOM so the
+  // Up/Down arrows jump a whole row regardless of density/viewport.
+  const gridColumns = () => {
+    const grid = document.querySelector('.grid')
+    const kids = grid?.children
+    if (!kids || kids.length < 2) return 1
+    const top0 = kids[0].offsetTop
+    let c = 1
+    for (let i = 1; i < kids.length; i++) {
+      if (kids[i].offsetTop === top0) c++
+      else break
+    }
+    return Math.max(1, c)
   }
 
 
