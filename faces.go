@@ -584,14 +584,16 @@ func nameFaceHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// faceInit wires up faces from the environment. Called once from main(); a cheap
-// no-op unless both ML_URL is set and FACES=1.
-func faceInit() {
+// faceInit wires up faces. Called once from main(); a cheap no-op unless the
+// ML sidecar is configured (ML_URL) and faces are enabled — either via the
+// Settings toggle (cfgEnabled) or the FACES env var.
+func faceInit(cfgEnabled bool) {
 	if !aiEnabled() {
 		return
 	}
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("FACES")))
-	facesOn = v == "1" || v == "true" || v == "yes"
+	envOn := v == "1" || v == "true" || v == "yes"
+	facesOn = cfgEnabled || envOn
 	if !facesOn {
 		return
 	}
