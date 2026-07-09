@@ -3,6 +3,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# insightface pulls in OpenCV, whose shared libs aren't in the slim image
+# (import fails with "libxcb.so.1: cannot open shared object file" and friends).
+# Install the runtime X/GL libraries OpenCV links against. CLIP-only builds
+# don't need these, but they're small and harmless.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # CPU-only torch first (avoids the multi-GB CUDA wheel), then the rest.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt .
