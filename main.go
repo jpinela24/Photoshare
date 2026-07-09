@@ -91,10 +91,6 @@ type AppConfig struct {
 	// works); absent/false = reachable on the LAN (the default). Inverted so an
 	// existing config without the key keeps LAN access.
 	DisableWebUI bool `json:"disableWebUI,omitempty"`
-	// FacesEnabled turns on face recognition / the People view. Only has an
-	// effect when the ML sidecar is configured (ML_URL). Off by default because
-	// the detector is more CPU-heavy than search.
-	FacesEnabled bool `json:"facesEnabled,omitempty"`
 }
 
 // User is a login account. Role is "admin" (full) or "viewer" (view-only).
@@ -647,7 +643,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			PhotoDir: baseDir, Port: port,
 			ShareName: shareName, ServerIP: serverIPFlag,
 			UploadFolder: uploadDir, FfmpegPath: ffmpegFlag, HTTPOnly: httpOnly, AutoSort: autoSort,
-			DisableWebUI: !lanAccess, FacesEnabled: facesOn,
+			DisableWebUI: !lanAccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -696,7 +692,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.10.1"
+const appVersion = "2.10.2"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3820,10 +3816,6 @@ func main() {
 	mux.HandleFunc("/api/search", protected(searchHandler))
 	mux.HandleFunc("/api/search/semantic", protected(semanticSearchHandler))
 	mux.HandleFunc("/api/ai/status", protected(aiStatusHandler))
-	mux.HandleFunc("/api/faces/status", protected(facesStatusHandler))
-	mux.HandleFunc("/api/faces/people", protected(peopleHandler))
-	mux.HandleFunc("/api/faces/photos", protected(personPhotosHandler))
-	mux.HandleFunc("/api/faces/name", protected(nameFaceHandler))
 	mux.HandleFunc("/api/browse", protected(browseHandler))
 	mux.HandleFunc("/api/meta", protected(metaHandler))
 	mux.HandleFunc("/api/folder-info", protected(folderInfoHandler))
@@ -3963,9 +3955,6 @@ func main() {
 
 	// AI semantic search — starts a background embedder only if ML_URL is set.
 	aiInit()
-	// Face recognition — opt-in via the Settings toggle (or FACES=1); no-op
-	// otherwise. Its detector yields to the CLIP indexer so they never compete.
-	faceInit(cfg.FacesEnabled)
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
 	// show its window instead. Everywhere else this is a no-op (true). The

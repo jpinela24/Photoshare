@@ -25,10 +25,6 @@ services:
       # AI semantic search — point at the ML sidecar below. Comment out (or
       # remove the ml service) to disable AI; the app then behaves as before.
       ML_URL: "http://photoshare-ml:8090"
-      # Face recognition (People view). Off by default — it's more CPU-heavy
-      # than search. Set to "1" to enable; the detector runs throttled in the
-      # background and never at the same time as the semantic-search indexer.
-      # FACES: "1"
     depends_on:
       - photoshare-ml
     volumes:

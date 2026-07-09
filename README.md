@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.10.1** · Linux / Docker · Windows
+**Current version: v2.10.2** · Linux / Docker · Windows
 
 ---
 
@@ -30,7 +30,6 @@ tray icon and a native window (Windows).
 ### Find
 - **Search** by name with **type** (photo/video) and **date** filters.
 - **Smart (AI) search** — find photos by what they show ("beach at sunset"), powered by local CLIP. Optional, fully private, off unless the ML sidecar is enabled.
-- **People** — faces detected and grouped into people you can name and browse. Optional (`FACES=1`), local, and CPU-throttled so it never competes with indexing.
 - **Duplicate finder** — content-hash based.
 - **Storage stats** — library size, counts, and real disk usage.
 - **On This Day** memories — background date index surfaces past photos.
@@ -203,6 +202,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.9.0** | **AI semantic search (Phase 1)** — find photos by what they show ("beach at sunset") instead of filenames, powered by local CLIP running in an optional `photoshare-ml` sidecar. Fully private (no cloud) and feature-flagged behind `ML_URL`, so it's off unless enabled. Adds a "Smart" search toggle in the sidebar with live indexing progress |
 | **2.10.0** | **Face recognition — People view (Phase 2)** — detects faces on the same ML sidecar (small `buffalo_s` model), groups them into people you can name and browse, all local. Deliberately low-impact: **off by default** (`FACES=1` to enable), lazy-loaded, and the background detector yields to the semantic-search indexer so the two never compete for CPU |
 | **2.10.1** | Face recognition is now a **Settings toggle** (System tab) instead of env-only — flip it on/off in the app when the AI sidecar is available; `FACES=1` still works as an override |
+| **2.10.2** | **Removed face recognition / the People view** — the detector produced too many false positives to be useful. Semantic (Smart) search is unaffected; the ML sidecar is back to CLIP-only (no insightface), so it's smaller and builds cleanly |
 
 ---
 
