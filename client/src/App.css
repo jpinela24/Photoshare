@@ -1043,14 +1043,31 @@ body {
   background: #1a1a20;
   border: 1px solid #2d2d36;
   border-radius: 7px;
-  padding: 5px 12px;
-  cursor: text;
+  padding: 5px 8px 5px 6px;
   transition: border-color 0.12s;
   display: flex;
   align-items: center;
+  gap: 4px;
   height: 32px;
 }
 .address-bar:hover { border-color: #4a4a58; }
+
+.address-up {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.address-up:hover:not(:disabled) { background: #26262e; color: #e4e4e7; }
+.address-up:disabled { opacity: 0.3; cursor: default; }
 
 .address-display {
   font-size: 0.82rem;
@@ -1065,9 +1082,12 @@ body {
   display: flex;
   align-items: center;
   gap: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   flex: 1;
+  scrollbar-width: none; /* the crumbs scroll horizontally on long paths */
 }
+.address-crumbs::-webkit-scrollbar { display: none; }
 
 .address-crumb-item {
   display: flex;
