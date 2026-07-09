@@ -14,6 +14,10 @@ COPY app.py .
 # the container works with no internet at runtime.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32')"
 
+# Pre-download the small face model pack too (only used if faces are enabled,
+# but baking it in keeps the runtime offline-capable and the first request fast).
+RUN python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_s', allowed_modules=['detection','recognition']).prepare(ctx_id=-1, det_size=(320,320))"
+
 EXPOSE 8090
 # Single worker: the model is loaded per-process and CPU inference is the
 # bottleneck anyway.

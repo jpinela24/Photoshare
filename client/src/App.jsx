@@ -112,6 +112,7 @@ const MonitorIcon     = (p) => <Svg {...p}><rect x="2" y="3" width="20" height="
 const QrIcon          = (p) => <Svg {...p}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="14" y1="14" x2="14" y2="17"/><line x1="17" y1="14" x2="21" y2="14"/><line x1="21" y1="14" x2="21" y2="17"/><line x1="14" y1="21" x2="21" y2="21"/><line x1="17" y1="17" x2="17" y2="17"/></Svg>
 const SparkleIcon     = (p) => <Svg {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></Svg>
 const MapPinIcon      = (p) => <Svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></Svg>
+const PeopleIcon      = (p) => <Svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></Svg>
 
 // ── VideoCard ─────────────────────────────────────────────────────────────────
 // Single-click  → play/pause inline in the grid card
@@ -849,6 +850,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
   const [searchTo, setSearchTo]     = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [ai, setAi] = useState(null)                  // /api/ai/status, null until known
+  const [faces, setFaces] = useState(null)            // /api/faces/status, null until known
   const [smart, setSmart] = useState(false)           // AI (semantic) search on/off
   const [creatingRoot, setCreatingRoot] = useState(false)
   const [rootFolderName, setRootFolderName] = useState('')
@@ -920,6 +922,22 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
   const aiReady = ai?.enabled && ai?.healthy
   // Don't leave Smart stuck on if AI goes away.
   useEffect(() => { if (!aiReady && smart) setSmart(false) }, [aiReady, smart])
+
+  // Faces status — decides whether the People button shows. Polled so the count
+  // and indexing state stay fresh.
+  useEffect(() => {
+    let stop = false
+    const tick = () => {
+      fetch('/api/faces/status')
+        .then(r => r.json())
+        .then(s => { if (!stop) setFaces(s) })
+        .catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, 8000)
+    return () => { stop = true; clearInterval(id) }
+  }, [])
+  const facesReady = faces?.enabled && faces?.healthy
 
   const submitRootCreate = async () => {
     const name = rootFolderName.trim()
@@ -1174,6 +1192,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
       <div className="sidebar-utils">
         <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
         <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
+        {facesReady && <button className={`util-btn ${currentPath === PEOPLE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(PEOPLE_PATH)}><PeopleIcon size={14} /> People</button>}
         <button className={`util-btn ${currentPath === DUPES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(DUPES_PATH)}><CopyIcon size={14} /> Duplicates</button>
         {token && <button className="util-btn" onClick={() => onShowSettings()}><GearIcon size={14} /> Settings</button>}
         <button className="util-btn" onClick={() => onShowStats()}><StatsIcon size={14} /> Storage Stats</button>
@@ -1186,6 +1205,119 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
 const DUPES_PATH = '__duplicates__'
 const MEMORIES_PATH = '__memories__'
 const MAP_PATH = '__map__'
+const PEOPLE_PATH = '__people__'
+
+// FaceThumb crops a single face out of a photo thumbnail using the normalized
+// 0..1 box the backend stored — pure CSS background crop, no server-side cutout.
+function FaceThumb({ path, box, size = 76 }) {
+  const [x1, y1, x2, y2] = box && box.length === 4 ? box : [0, 0, 1, 1]
+  const bw = Math.max(0.02, x2 - x1)
+  const bh = Math.max(0.02, y2 - y1)
+  const posX = bw >= 1 ? 50 : (x1 / (1 - bw)) * 100
+  const posY = bh >= 1 ? 50 : (y1 / (1 - bh)) * 100
+  return (
+    <div
+      className="face-thumb"
+      style={{
+        width: size, height: size,
+        backgroundImage: `url(/api/thumb?path=${encodeURIComponent(path)})`,
+        backgroundSize: `${100 / bw}% ${100 / bh}%`,
+        backgroundPosition: `${posX}% ${posY}%`,
+      }}
+    />
+  )
+}
+
+// ── PeopleView (faces grouped into people) ─────────────────────────────────────
+function PeopleView({ onOpen, adminToken }) {
+  const [people, setPeople] = useState(null)
+  const [status, setStatus] = useState(null)
+  const [active, setActive] = useState(null)   // drilled-into person
+  const [photos, setPhotos] = useState(null)
+
+  const loadPeople = () => fetch('/api/faces/people?min=2')
+    .then(r => r.json())
+    .then(d => setPeople(Array.isArray(d) ? d : []))
+    .catch(() => setPeople([]))
+
+  useEffect(() => {
+    fetch('/api/faces/status').then(r => r.json()).then(setStatus).catch(() => {})
+    loadPeople()
+  }, [])
+
+  const openPerson = (p) => {
+    setActive(p); setPhotos(null)
+    fetch(`/api/faces/photos?key=${encodeURIComponent(p.key)}`)
+      .then(r => r.json())
+      .then(d => setPhotos(Array.isArray(d) ? d : []))
+      .catch(() => setPhotos([]))
+  }
+
+  const rename = async (p, e) => {
+    e?.stopPropagation()
+    const name = window.prompt('Name this person (leave blank to clear):', p.name || '')
+    if (name === null) return
+    const body = JSON.stringify({ key: p.key, name })
+    if (adminToken) {
+      await adminFetch('/api/faces/name', adminToken, { method: 'POST', body })
+    } else {
+      await fetch('/api/faces/name', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+    }
+    await loadPeople()
+    setActive(a => (a && a.key === p.key ? { ...a, name: name.trim() } : a))
+  }
+
+  // Drill-down: one person's photos.
+  if (active) {
+    return (
+      <div className="people-view">
+        <div className="people-head">
+          <button className="util-btn" onClick={() => setActive(null)}>← All people</button>
+          <span className="people-title">{active.name || 'Unnamed person'} · {active.count} photo{active.count === 1 ? '' : 's'}</span>
+          {adminToken && <button className="util-btn" onClick={(e) => rename(active, e)}>Rename</button>}
+        </div>
+        {photos === null && <div className="status"><div className="spinner" /><span>Loading…</span></div>}
+        <div className="grid">
+          {photos?.map(item => (
+            <button key={item.path} className="card" onClick={() => onOpen(item)} title={item.path}>
+              <img className="card-thumb" src={`/api/thumb?path=${encodeURIComponent(item.path)}`} alt={item.name} loading="lazy" />
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="people-view">
+      {status && (
+        <div className="people-status">
+          {status.running
+            ? `Finding faces… ${status.processed}/${status.total}`
+            : `${status.people || (people?.length ?? 0)} people · ${status.faces || 0} faces across ${status.images || 0} photos`}
+        </div>
+      )}
+      {people === null && <div className="status"><div className="spinner" /><span>Loading…</span></div>}
+      {people?.length === 0 && (
+        <div className="people-empty">
+          No people yet. {status?.running ? 'The face scan is still running.' : 'Faces appear here once the background scan has processed your library.'}
+        </div>
+      )}
+      <div className="people-grid">
+        {people?.map(p => (
+          <div key={p.key} className="person-card" onClick={() => openPerson(p)}>
+            <FaceThumb path={p.cover} box={p.box} />
+            <div className="person-name">{p.name || 'Add name'}</div>
+            <div className="person-count">{p.count}</div>
+            {adminToken && (
+              <button className="person-edit" title="Name this person" onClick={(e) => rename(p, e)}>✎</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ── MapView (geotagged photos on a map) ────────────────────────────────────────
 function MapView({ onOpen }) {
@@ -2308,6 +2440,9 @@ function AddressBar({ path, onNavigate }) {
   if (path === MAP_PATH) {
     return <div className="address-bar"><span className="address-display"><MapPinIcon size={14} /> Map</span></div>
   }
+  if (path === PEOPLE_PATH) {
+    return <div className="address-bar"><span className="address-display"><PeopleIcon size={14} /> People</span></div>
+  }
 
   const parts = path ? path.split('/') : []
   const segs = [
@@ -2340,7 +2475,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.9.0'
+const APP_VERSION = '2.10.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2608,7 +2743,7 @@ export default function App() {
   const onGridMouseDown = (e) => {
     if (!selectMode || e.button !== 0) return
     // Only in the normal photo grid — never over Map/Memories/Trash/Duplicates.
-    if (path === MAP_PATH || path === MEMORIES_PATH || path === TRASH_PATH || path === DUPES_PATH) return
+    if (path === MAP_PATH || path === MEMORIES_PATH || path === TRASH_PATH || path === DUPES_PATH || path === PEOPLE_PATH) return
     if (e.target.closest('.card, button, a, input, select, label, .sel-bar')) return // empty space only
     setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY })
   }
@@ -2647,7 +2782,7 @@ export default function App() {
     setSelItems(new Set())
     setSelectMode(false)
     setGridFocus(null)
-    if (path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH) { setLoading(false); return }
+    if (path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH || path === PEOPLE_PATH) { setLoading(false); return }
     fetch(`/api/browse?path=${encodeURIComponent(path)}`)
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
       .then(data => { setEntries(data || []); setLoading(false) })
@@ -2876,7 +3011,7 @@ export default function App() {
         )}
 
         {/* Toolbar — integrated into topbar */}
-        {path !== TRASH_PATH && path !== DUPES_PATH && path !== MEMORIES_PATH && path !== MAP_PATH && (
+        {path !== TRASH_PATH && path !== DUPES_PATH && path !== MEMORIES_PATH && path !== MAP_PATH && path !== PEOPLE_PATH && (
           <div className="topbar-toolbar">
             {adminToken && (
               <button
@@ -2944,7 +3079,8 @@ export default function App() {
           {path === DUPES_PATH && <DuplicatesView />}
           {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} />}
           {path === MAP_PATH && <MapView onOpen={setSelected} />}
-          {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH ? null : (<>
+          {path === PEOPLE_PATH && <PeopleView onOpen={setSelected} adminToken={adminToken} />}
+          {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH || path === PEOPLE_PATH ? null : (<>
           {/* Status messages */}
           {(batchStatus || uploadStatus) && (
             <div style={{padding:'6px 0'}}><span className="batch-status">{batchStatus || uploadStatus}</span></div>

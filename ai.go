@@ -187,6 +187,13 @@ func mlHealthy() bool {
 // ── Embedding input: a small JPEG for any indexable image (HEIC included) ─────
 
 func embeddingJPEG(full, name string) ([]byte, error) {
+	return decodeFitJPEG(full, name, 336)
+}
+
+// decodeFitJPEG decodes any indexable image (HEIC included), fits it within
+// size×size, and re-encodes as JPEG — the compact input both the CLIP and face
+// endpoints consume. Larger size = better recall, more CPU.
+func decodeFitJPEG(full, name string, size int) ([]byte, error) {
 	var img image.Image
 	var err error
 	if isHeic(name) {
@@ -202,7 +209,7 @@ func embeddingJPEG(full, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	img = imaging.Fit(img, 336, 336, imaging.Lanczos)
+	img = imaging.Fit(img, size, size, imaging.Lanczos)
 	var buf bytes.Buffer
 	if err := imaging.Encode(&buf, img, imaging.JPEG, imaging.JPEGQuality(85)); err != nil {
 		return nil, err
