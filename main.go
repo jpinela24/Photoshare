@@ -91,6 +91,9 @@ type AppConfig struct {
 	// works); absent/false = reachable on the LAN (the default). Inverted so an
 	// existing config without the key keeps LAN access.
 	DisableWebUI bool `json:"disableWebUI,omitempty"`
+	// NotifyURL is an optional webhook (ntfy, Discord, or any receiver) that
+	// PhotoShare POSTs to on events like new uploads. Empty = notifications off.
+	NotifyURL string `json:"notifyUrl,omitempty"`
 }
 
 // User is a login account. Role is "admin" (full) or "viewer" (view-only).
@@ -643,7 +646,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			PhotoDir: baseDir, Port: port,
 			ShareName: shareName, ServerIP: serverIPFlag,
 			UploadFolder: uploadDir, FfmpegPath: ffmpegFlag, HTTPOnly: httpOnly, AutoSort: autoSort,
-			DisableWebUI: !lanAccess,
+			DisableWebUI: !lanAccess, NotifyURL: notifyURL,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -692,7 +695,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.11.0"
+const appVersion = "2.12.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1406,8 +1409,19 @@ func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 		uploaded++
 		log.Printf("[INBOX] %s", fh.Filename)
 	}
+	if uploaded > 0 {
+		notify("PhotoShare", fmt.Sprintf("%d file%s uploaded to the inbox", uploaded, plural(uploaded)))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"uploaded": uploaded, "skipped": skipped})
+}
+
+// plural returns "s" for counts other than 1 (for simple message building).
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // POST /api/upload?path=folder — upload one or more files into a folder
@@ -1451,6 +1465,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		src.Close()
 		uploaded++
 		log.Printf("[UPLOAD] %s → %s", fh.Filename, dest)
+	}
+	if uploaded > 0 {
+		where := rel
+		if where == "" {
+			where = "the library"
+		}
+		notify("PhotoShare", fmt.Sprintf("%d file%s uploaded to %s", uploaded, plural(uploaded), where))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"uploaded": uploaded, "errors": errs})
@@ -3806,6 +3827,7 @@ func main() {
 	mux.HandleFunc("/api/thumbs/status", protected(thumbStatusHandler))
 	mux.HandleFunc("/api/duplicates", protected(duplicatesHandler))
 	mux.HandleFunc("/api/inbox-upload", protected(inboxUploadHandler))
+	mux.HandleFunc("/api/admin/notify-test", protected(notifyTestHandler))
 	mux.HandleFunc("/api/open-folder", protected(openFolderHandler))
 	mux.HandleFunc("/api/trash", protected(trashListHandler))
 	mux.HandleFunc("/api/trash/thumb", protected(trashThumbHandler))
@@ -3955,6 +3977,8 @@ func main() {
 
 	// AI semantic search — starts a background embedder only if ML_URL is set.
 	aiInit()
+	// Outbound notifications — no-op unless a webhook URL is configured.
+	notifyInit(cfg.NotifyURL)
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
 	// show its window instead. Everywhere else this is a no-op (true). The

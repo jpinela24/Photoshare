@@ -112,6 +112,7 @@ const MonitorIcon     = (p) => <Svg {...p}><rect x="2" y="3" width="20" height="
 const QrIcon          = (p) => <Svg {...p}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="14" y1="14" x2="14" y2="17"/><line x1="17" y1="14" x2="21" y2="14"/><line x1="21" y1="14" x2="21" y2="17"/><line x1="14" y1="21" x2="21" y2="21"/><line x1="17" y1="17" x2="17" y2="17"/></Svg>
 const SparkleIcon     = (p) => <Svg {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></Svg>
 const MapPinIcon      = (p) => <Svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></Svg>
+const BellIcon        = (p) => <Svg {...p}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></Svg>
 
 // ── VideoCard ─────────────────────────────────────────────────────────────────
 // Single-click  → play/pause inline in the grid card
@@ -1878,6 +1879,7 @@ function SettingsModal({ adminToken, onClose }) {
   const [autostart, setAutostart]   = useState(false)
   const [updateInfo, setUpdateInfo] = useState(null)
   const [updateBusy, setUpdateBusy] = useState(false)
+  const [notifyTest, setNotifyTest] = useState(null) // null | 'sending' | 'ok' | 'fail'
   const [tab, setTab]               = useState('general')
 
   useEffect(() => {
@@ -2076,6 +2078,30 @@ function SettingsModal({ adminToken, onClose }) {
                       </div>
                     )}
                   </div>
+                  <label className="settings-label">
+                    <span className="settings-label-head"><BellIcon size={13} /> Notifications</span>
+                    <input
+                      className="adm-input"
+                      value={cfg.notifyUrl || ''}
+                      onChange={e => set('notifyUrl', e.target.value)}
+                      placeholder="ntfy or Discord webhook URL"
+                    />
+                    <span className="settings-hint">
+                      Get a message when photos are uploaded. Paste an ntfy topic URL (e.g. https://ntfy.sh/my-photos) or a Discord webhook URL. Leave blank to disable.
+                    </span>
+                    <div style={{display:'flex', gap:8, alignItems:'center', marginTop:2}}>
+                      <button className="adm-btn" type="button" disabled={!cfg.notifyUrl || notifyTest==='sending'} style={{alignSelf:'flex-start'}}
+                        onClick={async () => {
+                          setNotifyTest('sending')
+                          const r = await adminFetch('/api/admin/notify-test', null, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: cfg.notifyUrl }) })
+                          setNotifyTest(r.ok ? 'ok' : 'fail')
+                        }}>
+                        {notifyTest==='sending' ? 'Sending…' : 'Send test'}
+                      </button>
+                      {notifyTest==='ok'   && <span className="settings-hint" style={{color:'#4ade80'}}>✓ Sent — check your device</span>}
+                      {notifyTest==='fail' && <span className="settings-hint" style={{color:'#f87171'}}>Failed — check the URL</span>}
+                    </div>
+                  </label>
                   <div className="settings-about">
                     <p className="settings-version">PhotoShare v{APP_VERSION}</p>
                     <a className="settings-credit" href="https://github.com/jpinela24" target="_blank" rel="noopener noreferrer">Made by jpinela24 on GitHub</a>
@@ -2367,7 +2393,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.11.0'
+const APP_VERSION = '2.12.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
