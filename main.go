@@ -23,8 +23,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,12 +154,43 @@ func loadConfig(path string) AppConfig {
 	return cfg
 }
 
+// configMu serializes concurrent config writes so two updates (e.g. a settings
+// save racing a user change) can't interleave and corrupt the file.
+var configMu sync.Mutex
+
 func saveConfig(path string, cfg AppConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	configMu.Lock()
+	defer configMu.Unlock()
+	// Write atomically with restrictive permissions: the config can hold secret
+	// webhook tokens, so 0600 (owner-only), and a temp-file-then-rename so a
+	// crash mid-write can never leave a truncated/half-written config.
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".photoshare.config.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // envOr returns the env var value if set, else the fallback.
@@ -392,6 +425,20 @@ func (s *sessionStore) revoke(tok string) {
 	s.mu.Unlock()
 }
 
+// revokeUser deletes every active session belonging to username (case-insensitive).
+// Called after a password change, role change, account deletion, or — with
+// username "guest" — when guest access is disabled, so existing tokens for that
+// account stop working immediately instead of lingering until they expire.
+func (s *sessionStore) revokeUser(username string) {
+	s.mu.Lock()
+	for tok, sess := range s.m {
+		if strings.EqualFold(sess.Username, username) {
+			delete(s.m, tok)
+		}
+	}
+	s.mu.Unlock()
+}
+
 // sessionFromRequest reads + validates the session cookie.
 func sessionFromRequest(r *http.Request) (*session, bool) {
 	c, err := r.Cookie(sessionCookie)
@@ -419,9 +466,34 @@ func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
 }
 
+// resolveSession validates the session cookie AND re-authorizes it against the
+// *current* server state, rather than trusting the role captured at login:
+//   - guest sessions are honored only while guest access is still enabled;
+//   - a session whose user no longer exists (deleted account) is rejected;
+//   - the user's current role is used, so a demotion/promotion takes effect
+//     without waiting for the token to expire.
+// It returns a session carrying the live role.
+func resolveSession(r *http.Request) (*session, bool) {
+	sess, ok := sessionFromRequest(r)
+	if !ok {
+		return nil, false
+	}
+	if strings.EqualFold(sess.Username, "guest") {
+		if !guestAccess {
+			return nil, false
+		}
+		return &session{Username: "guest", Role: "viewer", Expires: sess.Expires}, true
+	}
+	u, idx := findUser(sess.Username)
+	if idx < 0 {
+		return nil, false // account deleted since login
+	}
+	return &session{Username: u.Username, Role: u.Role, Expires: sess.Expires}, true
+}
+
 // requireAuth ensures a valid session (any role — admin, viewer, or guest).
 func requireAuth(w http.ResponseWriter, r *http.Request) (*session, bool) {
-	sess, ok := sessionFromRequest(r)
+	sess, ok := resolveSession(r)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return nil, false
@@ -431,7 +503,7 @@ func requireAuth(w http.ResponseWriter, r *http.Request) (*session, bool) {
 
 // requireAdmin ensures an admin session.
 func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	sess, ok := sessionFromRequest(r)
+	sess, ok := resolveSession(r)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
@@ -485,6 +557,66 @@ func isVideo(name string) bool {
 	return videoExts[strings.ToLower(filepath.Ext(name))]
 }
 
+// realRoot returns the library root with all symlinks resolved, cached and
+// recomputed automatically if baseDir changes (which only happens across a
+// process restart). Empty when the library isn't configured yet.
+var (
+	rootMu        sync.Mutex
+	rootCacheBase string
+	rootCacheReal string
+)
+
+func realRoot() string {
+	rootMu.Lock()
+	defer rootMu.Unlock()
+	if baseDir == "" {
+		return ""
+	}
+	if baseDir == rootCacheBase && rootCacheReal != "" {
+		return rootCacheReal
+	}
+	real, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		real = filepath.Clean(baseDir)
+	}
+	rootCacheBase, rootCacheReal = baseDir, real
+	return real
+}
+
+// ensureWithinRoot resolves symlinks on full (or its nearest existing ancestor,
+// for paths being newly created) and confirms the real location is still inside
+// the resolved library root. This closes symlink-based escapes that the lexical
+// check below cannot see. A symlink is permitted only when its target stays
+// within the library.
+func ensureWithinRoot(full string) error {
+	root := realRoot()
+	if root == "" {
+		return nil // library not configured yet (first-run window)
+	}
+	p := full
+	for {
+		if _, err := os.Lstat(p); err == nil {
+			break
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			// Reached the filesystem root without finding an existing ancestor;
+			// the lexical containment check already vouched for this path.
+			return nil
+		}
+		p = parent
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes library")
+	}
+	return nil
+}
+
 func safePath(base, rel string) (string, error) {
 	if rel == "" {
 		rel = "."
@@ -493,6 +625,9 @@ func safePath(base, rel string) (string, error) {
 	if !strings.HasPrefix(full+string(filepath.Separator), filepath.Clean(base)+string(filepath.Separator)) &&
 		full != filepath.Clean(base) {
 		return "", fmt.Errorf("path outside base")
+	}
+	if err := ensureWithinRoot(full); err != nil {
+		return "", err
 	}
 	return full, nil
 }
@@ -523,6 +658,57 @@ func withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		next(w, r)
+	}
+}
+
+// sameOrigin guards cookie-authenticated mutations against CSRF. Browsers attach
+// an Origin header (and, failing that, a Referer) to state-changing requests; we
+// require its host to match the request's Host. Non-browser clients (curl,
+// scripts) that send neither header are allowed through — they carry no ambient
+// cookie and so are not a CSRF vector. We deliberately do NOT rely on
+// SameSite=Lax alone.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" {
+		return true // no browser-supplied origin → not a CSRF vector
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+// mutate wraps a state-changing handler: it enforces the exact HTTP method
+// (405 + Allow otherwise) and rejects cross-origin browser requests (CSRF).
+func mutate(method string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != method {
+			w.Header().Set("Allow", method)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !sameOrigin(r) {
+			http.Error(w, "cross-origin request refused", http.StatusForbidden)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// getOnly wraps a read-only handler to reject non-GET/HEAD methods so a
+// mutating verb can never reach a handler that wasn't meant to accept it.
+func getOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h(w, r)
 	}
 }
 
@@ -656,6 +842,10 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
+		if !sameOrigin(r) {
+			http.Error(w, "cross-origin request refused", http.StatusForbidden)
+			return
+		}
 		var cfg AppConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -695,7 +885,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.12.1"
+const appVersion = "2.13.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -902,6 +1092,10 @@ func autostartHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"enabled": autostartEnabled()})
 	case http.MethodPost:
+		if !sameOrigin(r) {
+			http.Error(w, "cross-origin request refused", http.StatusForbidden)
+			return
+		}
 		var body struct{ Enabled bool `json:"enabled"` }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -1371,6 +1565,50 @@ const maxUploadBytes = 10 << 30 // 10 GiB per request
 
 // POST /api/inbox-upload — upload to the public uploads inbox (requires a
 // logged-in session of any role, see the protected() wrapper at registration)
+// saveUploadedFile writes one uploaded file into destDir atomically: it streams
+// to a temp file in the same directory and only renames it into place after a
+// fully successful copy + close. Any error removes the partial temp file, so the
+// library never ends up with a truncated or half-written image. Returns the
+// final path on success.
+// uploadCopy streams an uploaded file to disk. A package var (not io.Copy
+// inlined) so tests can inject a failing copy to exercise partial-write cleanup.
+var uploadCopy = io.Copy
+
+func saveUploadedFile(fh *multipart.FileHeader, destDir string) (string, error) {
+	src, err := fh.Open()
+	if err != nil {
+		return "", fmt.Errorf("open source: %w", err)
+	}
+	defer src.Close()
+
+	dest := filepath.Join(destDir, filepath.Base(fh.Filename))
+	if _, err := os.Stat(dest); err == nil {
+		ext := filepath.Ext(dest)
+		base := strings.TrimSuffix(filepath.Base(dest), ext)
+		dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
+	}
+
+	tmp, err := os.CreateTemp(destDir, ".upload-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := uploadCopy(tmp, src); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", fmt.Errorf("write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return "", fmt.Errorf("close: %w", err)
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		os.Remove(tmpName)
+		return "", fmt.Errorf("finalize: %w", err)
+	}
+	return dest, nil
+}
+
 func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 	destDir := filepath.Join(baseDir, uploadDir)
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
@@ -1388,26 +1626,14 @@ func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 			skipped = append(skipped, name+" (not a photo or video)")
 			continue
 		}
-		src, err := fh.Open()
+		dest, err := saveUploadedFile(fh, destDir)
 		if err != nil {
+			skipped = append(skipped, name+" (upload failed)")
+			log.Printf("[INBOX] failed %s: %v", fh.Filename, err)
 			continue
 		}
-		dest := filepath.Join(destDir, name)
-		if _, err := os.Stat(dest); err == nil {
-			ext := filepath.Ext(dest)
-			base := strings.TrimSuffix(filepath.Base(dest), ext)
-			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
-		}
-		out, err := os.Create(dest)
-		if err != nil {
-			src.Close()
-			continue
-		}
-		io.Copy(out, src)
-		out.Close()
-		src.Close()
 		uploaded++
-		log.Printf("[INBOX] %s", fh.Filename)
+		log.Printf("[INBOX] %s", filepath.Base(dest))
 	}
 	if uploaded > 0 {
 		notify("PhotoShare", fmt.Sprintf("%d file%s uploaded to the inbox", uploaded, plural(uploaded)))
@@ -1443,26 +1669,16 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	uploaded := 0
 	var errs []string
 	for _, fh := range r.MultipartForm.File["files"] {
-		src, err := fh.Open()
-		if err != nil {
-			errs = append(errs, fh.Filename+": open error")
+		name := filepath.Base(fh.Filename)
+		if !isImage(name) && !isVideo(name) {
+			errs = append(errs, name+": not a photo or video")
 			continue
 		}
-		dest := filepath.Join(destDir, filepath.Base(fh.Filename))
-		if _, err := os.Stat(dest); err == nil {
-			ext := filepath.Ext(dest)
-			base := strings.TrimSuffix(filepath.Base(dest), ext)
-			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
-		}
-		out, err := os.Create(dest)
+		dest, err := saveUploadedFile(fh, destDir)
 		if err != nil {
-			src.Close()
-			errs = append(errs, fh.Filename+": create error")
+			errs = append(errs, name+": "+err.Error())
 			continue
 		}
-		io.Copy(out, src)
-		out.Close()
-		src.Close()
 		uploaded++
 		log.Printf("[UPLOAD] %s → %s", fh.Filename, dest)
 	}
@@ -2079,6 +2295,12 @@ func photoHandler(w http.ResponseWriter, r *http.Request) {
 	full, err := safePath(baseDir, rel)
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	// Only ever serve recognized media through this endpoint — never arbitrary
+	// files (config, keys, etc.) that happen to sit inside the library tree.
+	if base := filepath.Base(full); !isImage(base) && !isVideo(base) {
+		http.Error(w, "not a photo or video", http.StatusNotFound)
 		return
 	}
 
@@ -2779,6 +3001,10 @@ func adminMoveFileHandler(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/admin/login  {"password":"..."}  → {"token":"..."}
 // POST /api/login  {username,password}  OR  {guest:true}
+// loginFailDelay throttles failed password attempts. A variable (not a const)
+// so tests can shrink it and avoid real 500ms sleeps.
+var loginFailDelay = 500 * time.Millisecond
+
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2802,18 +3028,21 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "guest access disabled", http.StatusForbidden)
 			return
 		}
+		// Deliberately do NOT reset the failed-attempt counter here: a guest
+		// login must not clear a password brute-force lockout for the same IP.
 		username, role = "guest", "viewer"
 	} else {
 		u, ok := authenticate(body.Username, body.Password)
 		if !ok {
 			logins.fail(ip)
-			time.Sleep(500 * time.Millisecond) // slow brute-force
+			time.Sleep(loginFailDelay) // slow brute-force
 			http.Error(w, "wrong username or password", http.StatusUnauthorized)
 			return
 		}
+		// Only a successful password authentication clears the counter.
+		logins.reset(ip)
 		username, role = u.Username, u.Role
 	}
-	logins.reset(ip)
 	token := sessions.create(username, role)
 	setSessionCookie(w, token)
 	w.Header().Set("Content-Type", "application/json")
@@ -2832,7 +3061,7 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 // GET /api/me — who am I + whether guest login is offered
 func meHandler(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"authenticated": false, "guestAccess": guestAccess}
-	if sess, ok := sessionFromRequest(r); ok {
+	if sess, ok := resolveSession(r); ok {
 		resp["authenticated"] = true
 		resp["username"] = sess.Username
 		resp["role"] = sess.Role
@@ -2845,7 +3074,7 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 // ── User management (admin only) ─────────────────────────────────────────────
 
 // persistUsers saves the current users + guestAccess into the config file.
-func persistUsers() {
+func persistUsers() error {
 	cfg := loadConfig(configFilePath)
 	usersMu.Lock()
 	cfg.Users = append([]User(nil), users...)
@@ -2853,7 +3082,7 @@ func persistUsers() {
 	cfg.GuestAccess = guestAccess
 	cfg.AdminPass = ""     // ensure no stray plaintext
 	cfg.AdminPassHash = "" // superseded by the users list
-	saveConfig(configFilePath, cfg)
+	return saveConfig(configFilePath, cfg)
 }
 
 // GET /api/users — list accounts (no hashes)
@@ -2912,6 +3141,8 @@ func usersSaveHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		hash = h
 	}
+	roleChanged := idx >= 0 && existing.Role != body.Role
+	passwordChanged := body.Password != ""
 	usersMu.Lock()
 	if idx >= 0 {
 		users[idx] = User{Username: body.Username, PassHash: hash, Role: body.Role}
@@ -2919,7 +3150,15 @@ func usersSaveHandler(w http.ResponseWriter, r *http.Request) {
 		users = append(users, User{Username: body.Username, PassHash: hash, Role: body.Role})
 	}
 	usersMu.Unlock()
-	persistUsers()
+	if err := persistUsers(); err != nil {
+		http.Error(w, "failed to save users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// A password or role change invalidates that account's existing sessions,
+	// forcing a fresh login under the new credentials/authority.
+	if roleChanged || passwordChanged {
+		sessions.revokeUser(body.Username)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -2941,7 +3180,11 @@ func usersDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	usersMu.Lock()
 	users = append(users[:idx], users[idx+1:]...)
 	usersMu.Unlock()
-	persistUsers()
+	if err := persistUsers(); err != nil {
+		http.Error(w, "failed to save users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sessions.revokeUser(u.Username) // deleted account: kill its live sessions
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -2955,7 +3198,13 @@ func guestAccessHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	guestAccess = body.Enabled
-	persistUsers()
+	if err := persistUsers(); err != nil {
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !guestAccess {
+		sessions.revokeUser("guest") // disabling guest access logs out active guests
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -3747,49 +3996,56 @@ func main() {
 	}
 
 	// ── Auth (open: no session required) ──
-	mux.HandleFunc("/api/login", withCORS(loginHandler))
-	mux.HandleFunc("/api/logout", withCORS(logoutHandler))
-	mux.HandleFunc("/api/me", withCORS(meHandler))
+	mux.HandleFunc("/api/login", withCORS(mutate(http.MethodPost, loginHandler)))
+	mux.HandleFunc("/api/logout", withCORS(mutate(http.MethodPost, logoutHandler)))
+	mux.HandleFunc("/api/me", withCORS(getOnly(meHandler)))
 
 	// ── User management (admin only — enforced inside handlers) ──
 	mux.HandleFunc("/api/users", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			usersListHandler(w, r)
-		case http.MethodPost:
-			usersSaveHandler(w, r)
-		case http.MethodDelete:
-			usersDeleteHandler(w, r)
+		case http.MethodPost, http.MethodDelete:
+			if !sameOrigin(r) {
+				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				return
+			}
+			if r.Method == http.MethodPost {
+				usersSaveHandler(w, r)
+			} else {
+				usersDeleteHandler(w, r)
+			}
 		default:
+			w.Header().Set("Allow", "GET, POST, DELETE")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
-	mux.HandleFunc("/api/guest-access", withCORS(guestAccessHandler))
+	mux.HandleFunc("/api/guest-access", withCORS(mutate(http.MethodPost, guestAccessHandler)))
 
 	// ── Admin/write actions (each enforces admin role internally) ──
-	mux.HandleFunc("/api/admin/delete", withCORS(adminDeleteHandler))
-	mux.HandleFunc("/api/admin/folder/create", withCORS(adminCreateFolderHandler))
-	mux.HandleFunc("/api/admin/folder/rename", withCORS(adminRenameFolderHandler))
-	mux.HandleFunc("/api/admin/folder/delete", withCORS(adminDeleteFolderHandler))
-	mux.HandleFunc("/api/admin/file/move", withCORS(adminMoveFileHandler))
-	mux.HandleFunc("/api/admin/batch/delete", withCORS(adminBatchDeleteHandler))
-	mux.HandleFunc("/api/admin/batch/copy", withCORS(adminBatchCopyHandler))
-	mux.HandleFunc("/api/admin/batch/move", withCORS(adminBatchMoveHandler))
-	mux.HandleFunc("/api/admin/batch/rename", withCORS(adminBatchRenameHandler))
-	mux.HandleFunc("/api/thumbs/clear", withCORS(thumbClearHandler))
-	mux.HandleFunc("/api/admin/rotate", withCORS(adminRotateHandler))
-	mux.HandleFunc("/api/settings", withCORS(settingsHandler))
-	mux.HandleFunc("/api/upload", withCORS(uploadHandler))
-	mux.HandleFunc("/api/trash/restore", withCORS(trashRestoreHandler))
-	mux.HandleFunc("/api/trash/purge", withCORS(trashPurgeHandler))
-	mux.HandleFunc("/api/trash/purge-all", withCORS(trashPurgeAllHandler))
+	mux.HandleFunc("/api/admin/delete", withCORS(mutate(http.MethodDelete, adminDeleteHandler)))
+	mux.HandleFunc("/api/admin/folder/create", withCORS(mutate(http.MethodPost, adminCreateFolderHandler)))
+	mux.HandleFunc("/api/admin/folder/rename", withCORS(mutate(http.MethodPost, adminRenameFolderHandler)))
+	mux.HandleFunc("/api/admin/folder/delete", withCORS(mutate(http.MethodDelete, adminDeleteFolderHandler)))
+	mux.HandleFunc("/api/admin/file/move", withCORS(mutate(http.MethodPost, adminMoveFileHandler)))
+	mux.HandleFunc("/api/admin/batch/delete", withCORS(mutate(http.MethodPost, adminBatchDeleteHandler)))
+	mux.HandleFunc("/api/admin/batch/copy", withCORS(mutate(http.MethodPost, adminBatchCopyHandler)))
+	mux.HandleFunc("/api/admin/batch/move", withCORS(mutate(http.MethodPost, adminBatchMoveHandler)))
+	mux.HandleFunc("/api/admin/batch/rename", withCORS(mutate(http.MethodPost, adminBatchRenameHandler)))
+	mux.HandleFunc("/api/thumbs/clear", withCORS(mutate(http.MethodPost, thumbClearHandler)))
+	mux.HandleFunc("/api/admin/rotate", withCORS(mutate(http.MethodPost, adminRotateHandler)))
+	mux.HandleFunc("/api/settings", withCORS(settingsHandler)) // GET+POST; POST guarded inside
+	mux.HandleFunc("/api/upload", withCORS(mutate(http.MethodPost, uploadHandler)))
+	mux.HandleFunc("/api/trash/restore", withCORS(mutate(http.MethodPost, trashRestoreHandler)))
+	mux.HandleFunc("/api/trash/purge", withCORS(mutate(http.MethodDelete, trashPurgeHandler)))
+	mux.HandleFunc("/api/trash/purge-all", withCORS(mutate(http.MethodDelete, trashPurgeAllHandler)))
 	// /api/fs/* expose the whole filesystem (not just the library), so they
 	// require an admin session — except during first-run setup, before any
 	// session can exist yet, while baseDir is still unset. During that setup
 	// window they're further restricted to local requests (isLocalRequest)
 	// so a remote device on the LAN can't enumerate the filesystem before
 	// the person at the machine finishes onboarding.
-	mux.HandleFunc("/api/fs/roots", withCORS(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/fs/roots", withCORS(getOnly(func(w http.ResponseWriter, r *http.Request) {
 		if baseDir == "" {
 			if !isLocalRequest(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
@@ -3799,8 +4055,8 @@ func main() {
 			return
 		}
 		fsRootsHandler(w, r)
-	}))
-	mux.HandleFunc("/api/fs/browse", withCORS(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.HandleFunc("/api/fs/browse", withCORS(getOnly(func(w http.ResponseWriter, r *http.Request) {
 		if baseDir == "" {
 			if !isLocalRequest(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
@@ -3810,40 +4066,40 @@ func main() {
 			return
 		}
 		fsBrowseHandler(w, r)
-	}))
-	mux.HandleFunc("/api/autostart", withCORS(autostartHandler))
-	mux.HandleFunc("/api/update/check", withCORS(updateCheckHandler))
-	mux.HandleFunc("/api/update/run", withCORS(updateRunHandler))
+	})))
+	mux.HandleFunc("/api/autostart", withCORS(autostartHandler)) // GET+POST; POST guarded inside
+	mux.HandleFunc("/api/update/check", withCORS(getOnly(updateCheckHandler)))
+	mux.HandleFunc("/api/update/run", withCORS(mutate(http.MethodPost, updateRunHandler)))
 
 	// ── Desktop/onboarding (open: no session required) ──
-	mux.HandleFunc("/api/onboarding-status", withCORS(onboardingStatusHandler))
-	mux.HandleFunc("/api/onboarding", withCORS(onboardingHandler))
-	mux.HandleFunc("/api/platform", withCORS(platformHandler))
-	mux.HandleFunc("/api/show", withCORS(showHandler))
-	mux.HandleFunc("/api/quit", withCORS(quitHandler))
+	mux.HandleFunc("/api/onboarding-status", withCORS(getOnly(onboardingStatusHandler)))
+	mux.HandleFunc("/api/onboarding", withCORS(mutate(http.MethodPost, onboardingHandler)))
+	mux.HandleFunc("/api/platform", withCORS(getOnly(platformHandler)))
+	mux.HandleFunc("/api/show", withCORS(mutate(http.MethodPost, showHandler)))
+	mux.HandleFunc("/api/quit", withCORS(mutate(http.MethodPost, quitHandler)))
 
 	// ── Content (require a valid session — any role) ──
-	mux.HandleFunc("/api/stats", protected(statsHandler))
-	mux.HandleFunc("/api/thumbs/status", protected(thumbStatusHandler))
-	mux.HandleFunc("/api/duplicates", protected(duplicatesHandler))
-	mux.HandleFunc("/api/inbox-upload", protected(inboxUploadHandler))
-	mux.HandleFunc("/api/admin/notify-test", protected(notifyTestHandler))
-	mux.HandleFunc("/api/open-folder", protected(openFolderHandler))
-	mux.HandleFunc("/api/trash", protected(trashListHandler))
-	mux.HandleFunc("/api/trash/thumb", protected(trashThumbHandler))
-	mux.HandleFunc("/api/server-info", protected(serverInfoHandler))
-	mux.HandleFunc("/api/qr", protected(qrHandler))
-	mux.HandleFunc("/api/on-this-day", protected(onThisDayHandler))
-	mux.HandleFunc("/api/geo", protected(geoHandler))
-	mux.HandleFunc("/api/search", protected(searchHandler))
-	mux.HandleFunc("/api/search/semantic", protected(semanticSearchHandler))
-	mux.HandleFunc("/api/ai/status", protected(aiStatusHandler))
-	mux.HandleFunc("/api/browse", protected(browseHandler))
-	mux.HandleFunc("/api/meta", protected(metaHandler))
-	mux.HandleFunc("/api/folder-info", protected(folderInfoHandler))
-	mux.HandleFunc("/api/thumb", protected(thumbHandler))
-	mux.HandleFunc("/api/photo", protected(photoHandler))
-	mux.HandleFunc("/api/video", protected(photoHandler))
+	mux.HandleFunc("/api/stats", protected(getOnly(statsHandler)))
+	mux.HandleFunc("/api/thumbs/status", protected(getOnly(thumbStatusHandler)))
+	mux.HandleFunc("/api/duplicates", protected(getOnly(duplicatesHandler)))
+	mux.HandleFunc("/api/inbox-upload", protected(mutate(http.MethodPost, inboxUploadHandler)))
+	mux.HandleFunc("/api/admin/notify-test", protected(mutate(http.MethodPost, notifyTestHandler)))
+	mux.HandleFunc("/api/open-folder", protected(getOnly(openFolderHandler)))
+	mux.HandleFunc("/api/trash", protected(getOnly(trashListHandler)))
+	mux.HandleFunc("/api/trash/thumb", protected(getOnly(trashThumbHandler)))
+	mux.HandleFunc("/api/server-info", protected(getOnly(serverInfoHandler)))
+	mux.HandleFunc("/api/qr", protected(getOnly(qrHandler)))
+	mux.HandleFunc("/api/on-this-day", protected(getOnly(onThisDayHandler)))
+	mux.HandleFunc("/api/geo", protected(getOnly(geoHandler)))
+	mux.HandleFunc("/api/search", protected(getOnly(searchHandler)))
+	mux.HandleFunc("/api/search/semantic", protected(getOnly(semanticSearchHandler)))
+	mux.HandleFunc("/api/ai/status", protected(getOnly(aiStatusHandler)))
+	mux.HandleFunc("/api/browse", protected(getOnly(browseHandler)))
+	mux.HandleFunc("/api/meta", protected(getOnly(metaHandler)))
+	mux.HandleFunc("/api/folder-info", protected(getOnly(folderInfoHandler)))
+	mux.HandleFunc("/api/thumb", protected(getOnly(thumbHandler)))
+	mux.HandleFunc("/api/photo", protected(getOnly(photoHandler)))
+	mux.HandleFunc("/api/video", protected(getOnly(photoHandler)))
 
 	// ── Open / public (PWA assets + setup helper) ──
 	mux.HandleFunc("/manifest.json", manifestHandler)
