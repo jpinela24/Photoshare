@@ -381,6 +381,57 @@ func TestSaveUploadedFileSuccessLeavesNoTemp(t *testing.T) {
 	}
 }
 
+// ── 5b. Content-based media validation ───────────────────────────────────────
+
+func TestLooksLikeMedia(t *testing.T) {
+	pad := func(prefix []byte) []byte { // pad to >=12 bytes
+		b := make([]byte, 32)
+		copy(b, prefix)
+		return b
+	}
+	media := map[string][]byte{
+		"jpeg": pad([]byte{0xFF, 0xD8, 0xFF, 0xE0}),
+		"png":  pad([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}),
+		"gif":  pad([]byte("GIF89a")),
+		"webp": append([]byte("RIFF\x00\x00\x00\x00WEBP"), make([]byte, 8)...),
+		"heic": append([]byte{0, 0, 0, 0}, append([]byte("ftypheic"), make([]byte, 8)...)...),
+		"mp4":  append([]byte{0, 0, 0, 0}, append([]byte("ftypisom"), make([]byte, 8)...)...),
+		"mkv":  pad([]byte{0x1A, 0x45, 0xDF, 0xA3}),
+	}
+	for name, b := range media {
+		if !looksLikeMedia(b) {
+			t.Errorf("looksLikeMedia(%s) = false, want true", name)
+		}
+	}
+	notMedia := map[string][]byte{
+		"html":       []byte("<!DOCTYPE html><script>alert(1)</script>"),
+		"elf":        pad([]byte{0x7F, 'E', 'L', 'F'}),
+		"pe":         pad([]byte{'M', 'Z', 0x90, 0x00}),
+		"zip":        pad([]byte{'P', 'K', 0x03, 0x04}),
+		"pdf":        pad([]byte("%PDF-1.7")),
+		"plain text": []byte("just some words in a file, not media at all"),
+		"too short":  []byte{0xFF, 0xD8},
+	}
+	for name, b := range notMedia {
+		if looksLikeMedia(b) {
+			t.Errorf("looksLikeMedia(%s) = true, want false", name)
+		}
+	}
+}
+
+func TestHasMediaMagicRejectsDisguisedFile(t *testing.T) {
+	// A malicious HTML page uploaded as "photo.jpg" passes the extension check
+	// but must fail the content sniff.
+	evil := makeFileHeader(t, "photo.jpg", []byte("<html><script>alert(document.cookie)</script></html>"))
+	if hasMediaMagic(evil) {
+		t.Error("hasMediaMagic accepted an HTML file disguised as .jpg")
+	}
+	good := makeFileHeader(t, "photo.jpg", append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, make([]byte, 32)...))
+	if !hasMediaMagic(good) {
+		t.Error("hasMediaMagic rejected a real JPEG")
+	}
+}
+
 // ── 6. Config persistence hardening ──────────────────────────────────────────
 
 func TestSaveConfigPermissionsAndAtomicity(t *testing.T) {

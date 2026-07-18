@@ -2393,7 +2393,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.13.0'
+const APP_VERSION = '2.13.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

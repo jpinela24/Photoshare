@@ -885,7 +885,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.13.0"
+const appVersion = "2.13.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1570,6 +1570,67 @@ const maxUploadBytes = 10 << 30 // 10 GiB per request
 // fully successful copy + close. Any error removes the partial temp file, so the
 // library never ends up with a truncated or half-written image. Returns the
 // final path on success.
+// looksLikeMedia reports whether the leading bytes of a file match a known
+// photo or video signature. This is an allow-list (not a deny-list): a file
+// must positively identify as one of the formats we accept, so a script,
+// HTML page, or executable renamed to .jpg is rejected even though its
+// extension passes isImage/isVideo. It covers every extension in imageExts +
+// videoExts — including HEIC/HEIF and the ISO-BMFF video containers — so valid
+// uploads are never false-rejected.
+func looksLikeMedia(b []byte) bool {
+	if len(b) < 12 {
+		return false // too short to be a real photo/video
+	}
+	switch {
+	case b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF: // JPEG
+		return true
+	case bytes.HasPrefix(b, []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}): // PNG
+		return true
+	case bytes.HasPrefix(b, []byte("GIF87a")) || bytes.HasPrefix(b, []byte("GIF89a")): // GIF
+		return true
+	case b[0] == 'B' && b[1] == 'M': // BMP
+		return true
+	case bytes.HasPrefix(b, []byte{'I', 'I', 0x2A, 0x00}) || bytes.HasPrefix(b, []byte{'M', 'M', 0x00, 0x2A}): // TIFF
+		return true
+	case bytes.HasPrefix(b, []byte{0x1A, 0x45, 0xDF, 0xA3}): // Matroska / WebM (EBML)
+		return true
+	case bytes.HasPrefix(b, []byte{0x30, 0x26, 0xB2, 0x75}): // ASF / WMV
+		return true
+	case bytes.HasPrefix(b, []byte("FLV")): // FLV
+		return true
+	case bytes.HasPrefix(b, []byte{0x00, 0x00, 0x01, 0xBA}) || bytes.HasPrefix(b, []byte{0x00, 0x00, 0x01, 0xB3}): // MPEG-PS
+		return true
+	case b[0] == 0x47: // MPEG-TS sync byte
+		return true
+	}
+	// RIFF containers: WEBP (image) and AVI (video).
+	if bytes.HasPrefix(b, []byte("RIFF")) {
+		switch string(b[8:12]) {
+		case "WEBP", "AVI ":
+			return true
+		}
+	}
+	// ISO base media (ftyp box at offset 4): HEIC/HEIF, MP4, MOV, M4V — plus the
+	// bare-atom QuickTime variants that lead with moov/mdat/free/wide.
+	switch string(b[4:8]) {
+	case "ftyp", "moov", "mdat", "free", "wide", "skip":
+		return true
+	}
+	return false
+}
+
+// hasMediaMagic opens an uploaded file just far enough to sniff its signature.
+func hasMediaMagic(fh *multipart.FileHeader) bool {
+	f, err := fh.Open()
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := io.ReadFull(f, buf)
+	return looksLikeMedia(buf[:n])
+}
+
 // uploadCopy streams an uploaded file to disk. A package var (not io.Copy
 // inlined) so tests can inject a failing copy to exercise partial-write cleanup.
 var uploadCopy = io.Copy
@@ -1626,6 +1687,10 @@ func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 			skipped = append(skipped, name+" (not a photo or video)")
 			continue
 		}
+		if !hasMediaMagic(fh) {
+			skipped = append(skipped, name+" (contents are not a photo or video)")
+			continue
+		}
 		dest, err := saveUploadedFile(fh, destDir)
 		if err != nil {
 			skipped = append(skipped, name+" (upload failed)")
@@ -1672,6 +1737,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		name := filepath.Base(fh.Filename)
 		if !isImage(name) && !isVideo(name) {
 			errs = append(errs, name+": not a photo or video")
+			continue
+		}
+		if !hasMediaMagic(fh) {
+			errs = append(errs, name+": contents are not a photo or video")
 			continue
 		}
 		dest, err := saveUploadedFile(fh, destDir)
