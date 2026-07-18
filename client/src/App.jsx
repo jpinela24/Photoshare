@@ -2393,7 +2393,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.12.0'
+const APP_VERSION = '2.12.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2598,7 +2598,10 @@ export default function App() {
   const [selItems, setSelItems]           = useState(new Set())
   const [sortBy, setSortBy]               = useState('name')   // name | date | size | type
   const [sortDir, setSortDir]             = useState('asc')
-  const [gridSize, setGridSize]           = useState('medium') // small | medium | large
+  const [gridSize, setGridSize]           = useState(() => {   // small | medium | large — remembered
+    try { return localStorage.getItem('ps-grid-size') || 'small' } catch { return 'small' }
+  })
+  useEffect(() => { try { localStorage.setItem('ps-grid-size', gridSize) } catch {} }, [gridSize])
   const [pickerAction, setPickerAction]           = useState(null)
   const [dropZone, setDropZone]                   = useState(false)
   const [uploading, setUploading]                 = useState(false)
