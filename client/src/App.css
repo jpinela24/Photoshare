@@ -1378,10 +1378,10 @@ body {
 }
 
 /* ── Grid sizes ───────────────────────────────────────────────────────────── */
-.grid { display: grid; gap: 12px; }
-.grid-small  { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-.grid-medium { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
-.grid-large  { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.grid { display: grid; gap: 10px; }
+.grid-small  { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); }
+.grid-medium { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.grid-large  { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 
 /* ── Toolbar controls ─────────────────────────────────────────────────────── */
 
