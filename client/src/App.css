@@ -3081,7 +3081,7 @@ body {
 .search-wrap .search-clear[title="Filters"]:hover { opacity: 1; }
 
 /* ── Tight uniform grid + image-only photo tiles ── */
-.grid { gap: 3px; }
+.grid { gap: 10px; }
 .card {
   background: var(--glass);
   border: none;
