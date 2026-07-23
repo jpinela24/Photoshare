@@ -2073,6 +2073,43 @@ body {
 
 .dup-size  { font-size: 0.8rem; color: #a1a1aa; font-weight: 600; }
 .dup-waste { font-size: 0.78rem; color: #f87171; }
+.dup-dims  { color: #71717a; }
+
+/* Section heading separating exact duplicates from perceptual matches */
+.dup-section-title {
+  margin: 18px 2px 8px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #e4e4e7;
+}
+.dup-section-title .muted { font-weight: 400; color: #71717a; font-size: 0.8rem; }
+
+.dup-similarity {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+/* Per-group "keep the best one, bin the rest" action */
+.dup-resolve-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid #7f1d1d;
+  color: #fca5a5;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.dup-resolve-btn:hover { background: #7f1d1d; color: #fee2e2; }
 
 .dup-files { display: flex; flex-direction: column; }
 
