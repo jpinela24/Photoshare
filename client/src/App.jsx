@@ -103,6 +103,7 @@ const ImageIcon       = (p) => <Svg {...p}><rect x="3" y="3" width="18" height="
 const HardDriveIcon   = (p) => <Svg {...p}><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></Svg>
 const GridMediumIcon  = (p) => <Svg {...p}><rect x="3" y="4" width="8" height="16"/><rect x="13" y="4" width="8" height="16"/></Svg>
 const SquareIcon      = (p) => <Svg {...p}><rect x="4" y="4" width="16" height="16" rx="2"/></Svg>
+const UserIcon        = (p) => <Svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></Svg>
 const RotateCcwIcon   = (p) => <Svg {...p}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></Svg>
 const RotateCwIcon    = (p) => <Svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></Svg>
 const SunIcon         = (p) => <Svg {...p}><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></Svg>
@@ -1955,8 +1956,53 @@ function UsersManager() {
   )
 }
 
+// ── Settings building blocks ─────────────────────────────────────────────────
+
+// A settings row: name + description on the left, the control on the right.
+function SettingRow({ icon, title, desc, children, stacked }) {
+  return (
+    <div className={`set-row ${stacked ? 'set-row-stacked' : ''}`}>
+      <div className="set-row-text">
+        <div className="set-row-title">{icon}{title}</div>
+        {desc && <div className="set-row-desc">{desc}</div>}
+      </div>
+      <div className="set-row-control">{children}</div>
+    </div>
+  )
+}
+
+// iOS-style toggle switch (replaces raw checkboxes).
+function Toggle({ checked, onChange, disabled }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      className={`set-switch ${checked ? 'set-switch-on' : ''}`}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="set-switch-knob" />
+    </button>
+  )
+}
+
+// Collapsed-by-default group for rarely-touched options.
+function AdvancedGroup({ children }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="set-advanced">
+      <button type="button" className="set-advanced-toggle" onClick={() => setOpen(v => !v)}>
+        {open ? <ChevronDown /> : <ChevronRight />} Advanced
+      </button>
+      {open && <div className="set-advanced-body">{children}</div>}
+    </div>
+  )
+}
+
 function SettingsModal({ adminToken, onClose }) {
   const [cfg, setCfg]       = useState(null)
+  const [orig, setOrig]     = useState(null)
   const [busy, setBusy]     = useState(false)
   const [error, setError]   = useState(null)
   const [saved, setSaved]   = useState(false)
@@ -1966,12 +2012,12 @@ function SettingsModal({ adminToken, onClose }) {
   const [updateInfo, setUpdateInfo] = useState(null)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [notifyTest, setNotifyTest] = useState(null) // null | 'sending' | 'ok' | 'fail'
-  const [tab, setTab]               = useState('general')
+  const [tab, setTab]               = useState('library')
 
   useEffect(() => {
     fetch('/api/settings', { credentials: 'same-origin' })
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(setCfg)
+      .then(d => { setCfg(d); setOrig(d) })
       .catch(() => setError('Failed to load settings'))
   }, [])
 
@@ -2020,6 +2066,9 @@ function SettingsModal({ adminToken, onClose }) {
 
   const set = (k, v) => setCfg(c => ({...c, [k]: v}))
 
+  // Only offer Save (and the restart warning) when something actually changed.
+  const dirty = cfg && orig && JSON.stringify(cfg) !== JSON.stringify(orig)
+
   if (saved) return (
     <div className="adm-overlay" onClick={onClose}>
       <div className="adm-modal" onClick={e => e.stopPropagation()}>
@@ -2030,153 +2079,115 @@ function SettingsModal({ adminToken, onClose }) {
     </div>
   )
 
-  const TABS = [
-    { id: 'general', label: 'General' },
-    { id: 'sharing', label: 'Sharing' },
-    { id: 'users',   label: 'Users' },
-    { id: 'system',  label: 'System' },
+  const NAV = [
+    { id: 'library', label: 'Library',       icon: <FolderIcon size={15} /> },
+    { id: 'server',  label: 'Server',        icon: <GlobeIcon size={15} /> },
+    { id: 'notify',  label: 'Notifications', icon: <BellIcon size={15} /> },
+    { id: 'users',   label: 'Users',         icon: <UserIcon size={15} /> },
+    { id: 'system',  label: 'System',        icon: <GearIcon size={15} /> },
   ]
+  const PAGE_SUB = {
+    library: 'Where your photos live and how uploads are filed',
+    server:  'How PhotoShare is reachable on your network',
+    notify:  'Get notified when something happens',
+    users:   'Accounts and access',
+    system:  'Updates and app behavior',
+  }
 
   return (
     <div className="adm-overlay" onClick={onClose}>
-      <div className="adm-modal settings-modal" onClick={e => e.stopPropagation()}>
-        <h2 className="adm-modal-title"><GearIcon size={18} /> Settings</h2>
-
+      <div className="adm-modal set-modal" onClick={e => e.stopPropagation()}>
         {cfg && (
-          <>
-            <div className="settings-tabs">
-              {TABS.map(t => (
+          <div className="set-layout">
+            {/* ── Left nav ── */}
+            <nav className="set-nav">
+              <div className="set-nav-title"><GearIcon size={16} /> Settings</div>
+              {NAV.map(t => (
                 <button
                   key={t.id}
-                  className={`settings-tab ${tab === t.id ? 'settings-tab-active' : ''}`}
+                  className={`set-nav-item ${tab === t.id ? 'set-nav-active' : ''}`}
                   onClick={() => setTab(t.id)}
                 >
-                  {t.label}
+                  {t.icon}{t.label}
                   {t.id === 'users' && cfg.usingDefaultPassword && <span className="settings-tab-dot" title="Default password in use" />}
                 </button>
               ))}
-            </div>
+              <div className="set-nav-foot">
+                <span className="settings-version">v{APP_VERSION}</span>
+              </div>
+            </nav>
 
-            <div className="settings-body">
-              {/* ── General ── */}
-              {tab === 'general' && (
-                <div className="settings-grid">
-                  <label className="settings-label">
-                    <span className="settings-label-head"><FolderIcon size={13} /> Photos Folder</span>
-                    <div style={{display:'flex', gap:8}}>
-                      <input className="adm-input" value={cfg.photoDir||''} onChange={e => set('photoDir', e.target.value)} placeholder="/photos" />
-                      <button className="adm-btn" type="button" onClick={() => setShowPicker(true)}>Browse…</button>
-                    </div>
-                  </label>
-                  <label className="settings-label">
-                    <span className="settings-label-head"><PlugIcon size={13} /> Port</span>
-                    <input className="adm-input" value={cfg.port||''} onChange={e => set('port', e.target.value)} placeholder="8080" style={{width:110}} />
-                  </label>
-                  <label className="settings-label">
-                    <span className="settings-label-head"><UploadIcon size={13} /> Upload Inbox Folder</span>
-                    <input className="adm-input" value={cfg.uploadFolder||''} onChange={e => set('uploadFolder', e.target.value)} placeholder="_Uploads" />
-                  </label>
-                  <label className="settings-label settings-check">
-                    <input type="checkbox" checked={!!cfg.autoSortUploads} onChange={e => set('autoSortUploads', e.target.checked)} />
-                    <span className="settings-label-head"><CalendarIcon size={13} /> Auto-sort uploads into Year/Month folders by date</span>
-                  </label>
-                  <label className="settings-label">
-                    <span className="settings-label-head"><FilmIcon size={13} /> FFmpeg Path (optional)</span>
-                    <input className="adm-input" value={cfg.ffmpegPath||''} onChange={e => set('ffmpegPath', e.target.value)} placeholder="/usr/bin/ffmpeg (auto-detected)" />
-                  </label>
-                </div>
-              )}
+            {/* ── Content ── */}
+            <div className="set-page">
+              <header className="set-page-head">
+                <h2 className="set-page-title">{NAV.find(t => t.id === tab)?.label}</h2>
+                <p className="set-page-sub">{PAGE_SUB[tab]}</p>
+              </header>
 
-              {/* ── Sharing ── */}
-              {tab === 'sharing' && (
-                <div className="settings-grid">
-                  {isWindows && (
-                    <label className="settings-label settings-check">
-                      <input type="checkbox" checked={!cfg.disableWebUI} onChange={e => set('disableWebUI', !e.target.checked)} />
-                      <span className="settings-label-head"><GlobeIcon size={13} /> Enable Web UI on your network</span>
-                    </label>
-                  )}
-                  {isWindows && (
-                    <p className="settings-hint">Let phones and other computers open PhotoShare in a browser. When off, only this PC can use it (the app window keeps working).</p>
-                  )}
-                  <label className="settings-label">
-                    <span className="settings-label-head"><GlobeIcon size={13} /> Server IP (optional)</span>
-                    <input className="adm-input" value={cfg.serverIP||''} onChange={e => set('serverIP', e.target.value)} placeholder="10.0.0.20" />
-                  </label>
-                  <label className="settings-label">
-                    <span className="settings-label-head"><OpenFolderIcon size={13} /> SMB Share Name (optional)</span>
-                    <input className="adm-input" value={cfg.shareName||''} onChange={e => set('shareName', e.target.value)} placeholder="memories" />
-                  </label>
-                  {!isWindows && (
-                    <label className="settings-label settings-check">
-                      <input type="checkbox" checked={!cfg.httpOnly} onChange={e => set('httpOnly', !e.target.checked)} />
-                      <span className="settings-label-head"><LockIcon size={13} /> Use HTTPS (uncheck to drop the “Not Secure” warning on your LAN)</span>
-                    </label>
-                  )}
-                </div>
-              )}
-
-              {/* ── Users ── */}
-              {tab === 'users' && (
-                <>
-                  {cfg.usingDefaultPassword && (
-                    <p className="adm-warn" style={{marginBottom:10}}>
-                      ⚠ This admin account is still using a default password — change it below.
-                    </p>
-                  )}
-                  <UsersManager />
-                </>
-              )}
-
-              {/* ── System ── */}
-              {tab === 'system' && (
-                <div className="settings-grid">
-                  {isWindows && (
-                    <label className="settings-label settings-check">
-                      <input type="checkbox" checked={autostart} onChange={e => toggleAutostart(e.target.checked)} />
-                      <span className="settings-label-head"><PlugIcon size={13} /> Start PhotoShare when Windows starts</span>
-                    </label>
-                  )}
-                  <div className="settings-label">
-                    <span className="settings-label-head"><RefreshIcon size={13} /> Updates</span>
-                    {!updateInfo && (
-                      <button className="adm-btn" type="button" onClick={checkUpdate} disabled={updateBusy} style={{alignSelf:'flex-start'}}>
-                        {updateBusy ? 'Checking…' : 'Check for updates'}
-                      </button>
-                    )}
-                    {updateInfo && updateInfo.error && <p className="adm-error">{updateInfo.error}</p>}
-                    {updateInfo && !updateInfo.error && !updateInfo.available && (
-                      <p className="adm-modal-sub">You're up to date (v{updateInfo.current}).</p>
-                    )}
-                    {updateInfo && updateInfo.available && (
-                      <div>
-                        <p className="adm-modal-sub">v{updateInfo.latest} is available (you have v{updateInfo.current}).</p>
-                        {isWindows ? (
-                          <button className="adm-btn adm-btn-primary" type="button" onClick={runUpdate} disabled={updateBusy}>
-                            {updateBusy ? 'Updating…' : 'Download & install'}
-                          </button>
-                        ) : (
-                          <p className="adm-modal-sub" style={{marginTop:4}}>
-                            Update with <code>git pull &amp;&amp; docker compose up -d --build</code>
-                            {updateInfo.releaseURL && <> · <a href={updateInfo.releaseURL} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>release notes</a></>}
-                          </p>
-                        )}
+              <div className="set-page-body">
+                {/* ── Library ── */}
+                {tab === 'library' && (
+                  <>
+                    <SettingRow title="Photos folder" desc="The folder PhotoShare serves as your library." stacked>
+                      <div className="set-inline">
+                        <input className="adm-input" value={cfg.photoDir||''} onChange={e => set('photoDir', e.target.value)} placeholder="/photos" />
+                        <button className="adm-btn" type="button" onClick={() => setShowPicker(true)}>Browse…</button>
                       </div>
+                    </SettingRow>
+                    <SettingRow title="Auto-sort uploads" desc="File inbox uploads into Year/Month folders by capture date.">
+                      <Toggle checked={!!cfg.autoSortUploads} onChange={v => set('autoSortUploads', v)} />
+                    </SettingRow>
+                    <AdvancedGroup>
+                      <SettingRow title="Upload inbox folder" desc="Folder name (inside the library) where uploads land." stacked>
+                        <input className="adm-input" value={cfg.uploadFolder||''} onChange={e => set('uploadFolder', e.target.value)} placeholder="_Uploads" />
+                      </SettingRow>
+                      <SettingRow title="FFmpeg path" desc="Only set this if video thumbnails don't work — it's auto-detected." stacked>
+                        <input className="adm-input" value={cfg.ffmpegPath||''} onChange={e => set('ffmpegPath', e.target.value)} placeholder="auto-detected" />
+                      </SettingRow>
+                    </AdvancedGroup>
+                  </>
+                )}
+
+                {/* ── Server ── */}
+                {tab === 'server' && (
+                  <>
+                    {isWindows && (
+                      <SettingRow title="Web access on your network" desc="Let phones and other computers open PhotoShare in a browser. When off, only this PC can use it.">
+                        <Toggle checked={!cfg.disableWebUI} onChange={v => set('disableWebUI', !v)} />
+                      </SettingRow>
                     )}
-                  </div>
-                  <label className="settings-label">
-                    <span className="settings-label-head"><BellIcon size={13} /> Notifications</span>
-                    <input
-                      className="adm-input"
-                      value={cfg.notifyUrl || ''}
-                      onChange={e => set('notifyUrl', e.target.value)}
-                      placeholder="ntfy or Discord webhook URL"
-                    />
-                    <span className="settings-hint">
-                      Get a message when photos are uploaded. Paste an ntfy topic URL (e.g. https://ntfy.sh/my-photos) or a Discord webhook URL. Leave blank to disable.
-                    </span>
-                    <div style={{display:'flex', gap:8, alignItems:'center', marginTop:2}}>
-                      <button className="adm-btn" type="button" disabled={!cfg.notifyUrl || notifyTest==='sending'} style={{alignSelf:'flex-start'}}
+                    {!isWindows && (
+                      <SettingRow title="HTTPS" desc="Serve over HTTPS with a self-signed certificate. Turn off to drop the browser's “Not Secure” warning on a trusted LAN.">
+                        <Toggle checked={!cfg.httpOnly} onChange={v => set('httpOnly', !v)} />
+                      </SettingRow>
+                    )}
+                    <SettingRow title="SMB share name" desc="If the library is also a network share, folders can show their smb:// path." stacked>
+                      <input className="adm-input" value={cfg.shareName||''} onChange={e => set('shareName', e.target.value)} placeholder="e.g. memories (optional)" />
+                    </SettingRow>
+                    <AdvancedGroup>
+                      <SettingRow title="Server IP" desc="Overrides the auto-detected LAN address used in QR codes and share links." stacked>
+                        <input className="adm-input" value={cfg.serverIP||''} onChange={e => set('serverIP', e.target.value)} placeholder="auto-detected" />
+                      </SettingRow>
+                      <SettingRow title="Port" desc="The port PhotoShare listens on." stacked>
+                        <input className="adm-input" value={cfg.port||''} onChange={e => set('port', e.target.value)} placeholder="8080" style={{width:110}} />
+                      </SettingRow>
+                    </AdvancedGroup>
+                  </>
+                )}
+
+                {/* ── Notifications ── */}
+                {tab === 'notify' && (
+                  <>
+                    <SettingRow title="Upload notifications" desc="Send a message to an ntfy topic or Discord webhook whenever photos are uploaded. Leave blank to disable." stacked>
+                      <input
+                        className="adm-input"
+                        value={cfg.notifyUrl || ''}
+                        onChange={e => set('notifyUrl', e.target.value)}
+                        placeholder="https://ntfy.sh/my-photos  ·  Discord webhook URL"
+                      />
+                    </SettingRow>
+                    <div className="set-inline">
+                      <button className="adm-btn" type="button" disabled={!cfg.notifyUrl || notifyTest==='sending'}
                         onClick={async () => {
                           setNotifyTest('sending')
                           const r = await adminFetch('/api/admin/notify-test', null, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: cfg.notifyUrl }) })
@@ -2187,27 +2198,76 @@ function SettingsModal({ adminToken, onClose }) {
                       {notifyTest==='ok'   && <span className="settings-hint" style={{color:'#4ade80'}}>✓ Sent — check your device</span>}
                       {notifyTest==='fail' && <span className="settings-hint" style={{color:'#f87171'}}>Failed — check the URL</span>}
                     </div>
-                  </label>
-                  <div className="settings-about">
-                    <p className="settings-version">PhotoShare v{APP_VERSION}</p>
-                    <a className="settings-credit" href="https://github.com/jpinela24" target="_blank" rel="noopener noreferrer">Made by jpinela24 on GitHub</a>
-                  </div>
+                  </>
+                )}
+
+                {/* ── Users ── */}
+                {tab === 'users' && (
+                  <>
+                    {cfg.usingDefaultPassword && (
+                      <p className="adm-warn" style={{marginBottom:10}}>
+                        ⚠ This admin account is still using a default password — change it below.
+                      </p>
+                    )}
+                    <UsersManager />
+                  </>
+                )}
+
+                {/* ── System ── */}
+                {tab === 'system' && (
+                  <>
+                    {isWindows && (
+                      <SettingRow title="Start with Windows" desc="Launch PhotoShare automatically when you sign in. Applies immediately.">
+                        <Toggle checked={autostart} onChange={toggleAutostart} />
+                      </SettingRow>
+                    )}
+                    <SettingRow title="Updates" desc={updateInfo && !updateInfo.error && !updateInfo.available ? `You're up to date (v${updateInfo.current}).` : 'Check GitHub for a newer release.'}>
+                      {!updateInfo && (
+                        <button className="adm-btn" type="button" onClick={checkUpdate} disabled={updateBusy}>
+                          {updateBusy ? 'Checking…' : 'Check for updates'}
+                        </button>
+                      )}
+                      {updateInfo && updateInfo.error && <span className="adm-error">{updateInfo.error}</span>}
+                      {updateInfo && !updateInfo.error && !updateInfo.available && <CheckIcon size={16} />}
+                    </SettingRow>
+                    {updateInfo && updateInfo.available && (
+                      <div className="set-update-banner">
+                        <span>v{updateInfo.latest} is available (you have v{updateInfo.current}).</span>
+                        {isWindows ? (
+                          <button className="adm-btn adm-btn-primary" type="button" onClick={runUpdate} disabled={updateBusy}>
+                            {updateBusy ? 'Updating…' : 'Download & install'}
+                          </button>
+                        ) : (
+                          <span>
+                            Update with <code>git pull &amp;&amp; docker compose up -d --build</code>
+                            {updateInfo.releaseURL && <> · <a href={updateInfo.releaseURL} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>release notes</a></>}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="settings-about">
+                      <p className="settings-version">PhotoShare v{APP_VERSION}</p>
+                      <a className="settings-credit" href="https://github.com/jpinela24" target="_blank" rel="noopener noreferrer">Made by jpinela24 on GitHub</a>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* ── Footer ── */}
+              <footer className="set-foot">
+                {error && <span className="adm-error">{error}</span>}
+                {dirty && <span className="set-foot-note">Saving restarts the app</span>}
+                <div className="set-foot-btns">
+                  <button className="adm-btn" onClick={onClose}>{dirty ? 'Cancel' : 'Close'}</button>
+                  {dirty && (
+                    <button className="adm-btn adm-btn-primary" onClick={save} disabled={busy}>
+                      {busy ? 'Saving…' : <><SaveIcon size={14} /> Save &amp; Restart</>}
+                    </button>
+                  )}
                 </div>
-              )}
+              </footer>
             </div>
-
-            {error && <div className="adm-error" style={{marginTop:8}}>{error}</div>}
-            {(tab === 'general' || tab === 'sharing') && (
-              <p className="adm-warn settings-restart-note">⚠ Saving applies these changes and restarts the app.</p>
-            )}
-
-            <div className="adm-btns settings-footer">
-              <button className="adm-btn" onClick={onClose}>{tab === 'general' || tab === 'sharing' ? 'Cancel' : 'Close'}</button>
-              <button className="adm-btn adm-btn-primary" onClick={save} disabled={busy}>
-                {busy ? 'Saving…' : <><SaveIcon size={14} /> Save &amp; Restart</>}
-              </button>
-            </div>
-          </>
+          </div>
         )}
       </div>
       {showPicker && (
@@ -2479,7 +2539,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.14.0'
+const APP_VERSION = '2.15.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
