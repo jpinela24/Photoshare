@@ -1320,24 +1320,74 @@ function DuplicatesView() {
 
   const doDelete = async (file, tok) => {
     await adminFetch(`/api/admin/delete?path=${encodeURIComponent(file.path)}`, tok, { method: 'DELETE' })
-    setData(prev => ({
-      ...prev,
-      groups: prev.groups
-        .map(g => ({ ...g, files: g.files.filter(f => f.path !== file.path) }))
-        .filter(g => g.files.length > 1)
-    }))
+    const drop = list => (list || [])
+      .map(g => ({ ...g, files: g.files.filter(f => f.path !== file.path) }))
+      .filter(g => g.files.length > 1)
+    setData(prev => ({ ...prev, groups: drop(prev.groups), similar: drop(prev.similar) }))
     setStatus('✓ Moved to trash')
     setTimeout(() => setStatus(null), 2000)
   }
 
   const trash = (file) => doDelete(file, token)
 
+  const exactGroups   = data?.groups  || []
+  const similarGroups = data?.similar || []
+  const totalExtras   = [...exactGroups, ...similarGroups]
+    .reduce((n, g) => n + g.files.filter(f => !f.best).length, 0)
+
+  // Trash every copy in a group except the recommended keeper. The server
+  // decides which one that is, so the UI can't disagree with it.
+  const resolve = async (body, label) => {
+    const r = await adminFetch('/api/duplicates/resolve', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!r?.ok) { setStatus('⚠ Cleanup failed'); setTimeout(() => setStatus(null), 3000); return }
+    const res = await r.json()
+    setStatus(`✓ ${res.trashed} file${res.trashed === 1 ? '' : 's'} moved to trash · ${fmtBytes(res.freed)} freed${label}`)
+    setTimeout(() => setStatus(null), 4000)
+    scan() // results now reference trashed files — re-scan for a fresh picture
+  }
+
+  const resolveGroup = (group) => resolve({ groups: [group.hash], kind: group.kind }, '')
+
+  const cleanAll = () => {
+    if (!window.confirm(
+      `Move ${totalExtras} duplicate file${totalExtras === 1 ? '' : 's'} to the trash?\n\n` +
+      `The best copy in each group is kept. Nothing is permanently deleted — ` +
+      `everything goes to the recycle bin, where you can restore it.`
+    )) return
+    resolve({ all: true }, '')
+  }
+
+  const cancelScan = () => {
+    adminFetch('/api/duplicates/cancel', token, { method: 'POST' })
+      .catch(() => {})
+    setStatus('Canceling…')
+  }
+
   return (
     <div className="trash-view">
       <div className="trash-header">
         <span className="trash-title"><CopyIcon size={16} /> Duplicate Finder</span>
-        {data && <span className="trash-count">{data.groups?.length || 0} groups · {fmtBytes(data.totalWaste)} wasted</span>}
-        <button className="trash-empty-btn" onClick={scan} style={{background:'none',borderColor:'#3730a3',color:'#a5b4fc'}}><RefreshIcon size={13} /> Re-scan</button>
+        {data && (
+          <span className="trash-count">
+            {exactGroups.length} exact
+            {similarGroups.length > 0 && ` · ${similarGroups.length} similar`}
+            {data.totalWaste > 0 && ` · ${fmtBytes(data.totalWaste)} wasted`}
+          </span>
+        )}
+        {!loading && token && totalExtras > 0 && (
+          <button className="trash-empty-btn" onClick={cleanAll}>
+            <TrashIcon size={13} /> Trash all {totalExtras} extras
+          </button>
+        )}
+        {!loading && (
+          <button className="trash-empty-btn" onClick={scan} style={{background:'none',borderColor:'#3730a3',color:'#a5b4fc'}}><RefreshIcon size={13} /> Re-scan</button>
+        )}
+        {loading && (
+          <button className="trash-empty-btn" onClick={cancelScan} style={{background:'none',borderColor:'#52525b',color:'#a1a1aa'}}>Cancel</button>
+        )}
         {status && <span className="batch-status">{status}</span>}
       </div>
 
@@ -1347,48 +1397,84 @@ function DuplicatesView() {
           <span>
             {progress?.phase === 'hashing' && progress.total > 0
               ? `Comparing files… ${progress.processed} / ${progress.total}`
-              : progress?.phase === 'sampling'
-                ? 'Fingerprinting candidates…'
-                : 'Scanning library… this may take a while on large libraries.'}
+              : progress?.phase === 'comparing' && progress.total > 0
+                ? `Looking for similar photos… ${progress.processed} / ${progress.total}`
+                : progress?.phase === 'sampling'
+                  ? 'Fingerprinting candidates…'
+                  : 'Scanning library… this may take a while on large libraries.'}
           </span>
         </div>
       )}
 
       {error && <div className="status error">⚠ {error}</div>}
-      {!loading && !error && data?.groups?.length === 0 && (
-        <div className="status muted">✓ No exact duplicates found.</div>
+      {!loading && !error && exactGroups.length === 0 && similarGroups.length === 0 && (
+        <div className="status muted">✓ No duplicates or similar photos found.</div>
       )}
 
-      {!loading && !error && data?.groups?.map(group => (
-        <div key={group.hash} className="dup-group">
-          <div className="dup-group-header">
-            <span className="dup-size">{fmtBytes(group.size)} each</span>
-            <span className="dup-waste">· {fmtBytes(group.size * (group.files.length - 1))} wasted</span>
-          </div>
-          <div className="dup-files">
-            {group.files.map((file, i) => (
-              <div key={file.path} className={`dup-file ${i === 0 ? 'dup-keep' : ''}`}>
-                <div className="dup-thumb-wrap">
-                  {(isImageExt(file.name) || isVideoExt(file.name)) && (
-                    <img className="dup-thumb" src={`/api/thumb?path=${encodeURIComponent(file.path)}`} alt={file.name} loading="lazy" />
-                  )}
-                  {i === 0 && <div className="dup-keep-badge">Keep</div>}
-                </div>
-                <div className="dup-info">
-                  <div className="dup-name">{file.name}</div>
-                  <div className="dup-path"><FolderIcon size={11} /> {file.path.split('/').slice(0, -1).join('/') || 'root'}</div>
-                  <div className="dup-date"><CalendarIcon size={11} /> {file.mod}</div>
-                </div>
-                {i !== 0 && token && (
-                  <button className="trash-btn-purge" onClick={() => trash(file)}><TrashIcon size={14} /> Delete</button>
-                )}
-              </div>
-            ))}
-          </div>
+      {!loading && !error && exactGroups.length > 0 && (
+        <div className="dup-section-title">Exact duplicates <span className="muted">· byte-for-byte identical</span></div>
+      )}
+      {!loading && !error && exactGroups.map(group => renderGroup(group))}
+
+      {!loading && !error && similarGroups.length > 0 && (
+        <div className="dup-section-title">
+          Similar photos <span className="muted">· same picture, different size or quality</span>
         </div>
-      ))}
+      )}
+      {!loading && !error && similarGroups.map(group => renderGroup(group))}
     </div>
   )
+
+  function renderGroup(group) {
+    const isSimilar = group.kind === 'similar'
+    const extras = group.files.filter(f => !f.best).length
+    return (
+      <div key={group.hash} className="dup-group">
+        <div className="dup-group-header">
+          {isSimilar ? (
+            <>
+              <span className="dup-similarity">{group.similarity}% match</span>
+              <span className="dup-waste">· {fmtBytes(group.size)} recoverable</span>
+            </>
+          ) : (
+            <>
+              <span className="dup-size">{fmtBytes(group.size)} each</span>
+              <span className="dup-waste">· {fmtBytes(group.size * (group.files.length - 1))} wasted</span>
+            </>
+          )}
+          {token && extras > 0 && (
+            <button className="dup-resolve-btn" onClick={() => resolveGroup(group)}>
+              <TrashIcon size={12} /> Keep best, trash {extras}
+            </button>
+          )}
+        </div>
+        <div className="dup-files">
+          {group.files.map(file => (
+            <div key={file.path} className={`dup-file ${file.best ? 'dup-keep' : ''}`}>
+              <div className="dup-thumb-wrap">
+                {(isImageExt(file.name) || isVideoExt(file.name)) && (
+                  <img className="dup-thumb" src={`/api/thumb?path=${encodeURIComponent(file.path)}`} alt={file.name} loading="lazy" />
+                )}
+                {file.best && <div className="dup-keep-badge">Keep</div>}
+              </div>
+              <div className="dup-info">
+                <div className="dup-name">{file.name}</div>
+                <div className="dup-path"><FolderIcon size={11} /> {file.path.split('/').slice(0, -1).join('/') || 'root'}</div>
+                <div className="dup-date">
+                  <CalendarIcon size={11} /> {file.mod}
+                  {file.width > 0 && <span className="dup-dims"> · {file.width}×{file.height}</span>}
+                  {file.copies > 1 && <span className="dup-dims"> · {file.copies} copies</span>}
+                </div>
+              </div>
+              {!file.best && token && (
+                <button className="trash-btn-purge" onClick={() => trash(file)}><TrashIcon size={14} /> Delete</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
 }
 
 // Helper to check extension without Go backend
@@ -2393,7 +2479,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.13.2'
+const APP_VERSION = '2.14.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

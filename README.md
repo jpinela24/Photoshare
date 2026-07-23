@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.13.2** · Linux / Docker · Windows
+**Current version: v2.14.0** · Linux / Docker · Windows
 
 ---
 
@@ -30,7 +30,7 @@ tray icon and a native window (Windows).
 ### Find
 - **Search** by name with **type** (photo/video) and **date** filters.
 - **Smart (AI) search** — find photos by what they show ("beach at sunset"), powered by local CLIP. Optional, fully private, off unless the ML sidecar is enabled.
-- **Duplicate finder** — content-hash based.
+- **Duplicate finder** — finds **exact** copies (content-hash) *and* **similar photos** (perceptual hash: the same picture saved at a different size or quality). Parallel + cached, so re-scans are near-instant; recommends which copy to keep and cleans up the rest in one click.
 - **Storage stats** — library size, counts, and real disk usage.
 - **On This Day** memories — background date index surfaces past photos.
 - **Map view** — plots photos by EXIF GPS on an OpenStreetMap.
@@ -207,6 +207,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.14.0** | **Duplicate finder: faster, and finds more** — hashing now runs on a **worker pool** and every hash is **cached** (keyed by path+size+mtime), so a re-scan only pays for new or changed files. Sampling checks the file's **head *and* tail**, so same-camera videos no longer force needless full reads. New: **similar-photo detection** via perceptual hashing — catches the same picture saved at a different size/quality (WhatsApp copies, resizes, HEIC vs JPEG) that an exact hash can never see. Each group now **recommends which copy to keep** (highest resolution, most original name/location) with one-click **"keep best, trash the rest"** and a global **"trash all extras"**; long scans can be **canceled**. Hardlinks are no longer miscounted as wasted space |
 | **2.13.2** | **A little more room in the grid** — bumped the spacing between folder/photo tiles (the effective gap was only 3px, which read as cluttered) so the grid breathes without changing tile size |
 | **2.13.1** | **Content-validated uploads** — uploaded files are now checked by their actual **magic bytes**, not just the filename extension, so a script/HTML/executable renamed to `.jpg` is refused (`contents are not a photo or video`). Covers every accepted format including HEIC/HEIF and all video containers, so valid photos/videos are never rejected |
 | **2.13.0** | **Security hardening** — every state-changing endpoint now enforces its HTTP method (`405` + `Allow`) and rejects **cross-origin** requests (CSRF), so a `GET` can never delete or purge. Sessions are **revalidated on every request** against the live user list: deleting or demoting a user, changing a password, or disabling guest access now takes effect immediately instead of lingering until the token expires. `safePath` resolves **symlinks** and blocks any that escape the library (in-library symlinks still work), and `/api/photo` refuses non-media files. Also: guest login no longer resets the password brute-force lockout, uploads are written **atomically** with per-file error reporting (no more truncated files on failure), and the config file is written atomically with `0600` permissions (it can hold secret webhook tokens). **Reverse-proxy note:** the CSRF check compares the browser `Origin`/`Referer` host against the request `Host`, so your proxy must preserve the original `Host` header (nginx: `proxy_set_header Host $host;`) |
