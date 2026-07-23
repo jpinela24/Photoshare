@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.14.0** · Linux / Docker · Windows
+**Current version: v2.15.0** · Linux / Docker · Windows
 
 ---
 
@@ -207,6 +207,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.15.0** | **Settings redesigned** — a proper settings dialog with **sidebar navigation** (Library · Server · Notifications · Users · System), each page with clear titles and per-setting descriptions. Checkboxes became real **toggle switches**; rarely-touched options (FFmpeg path, upload folder name, server IP, port) moved into collapsed **Advanced** sections. The **Save & Restart** button and its warning now only appear when something actually changed. Fully responsive — the nav collapses to a top bar on phones |
 | **2.14.0** | **Duplicate finder: faster, and finds more** — hashing now runs on a **worker pool** and every hash is **cached** (keyed by path+size+mtime), so a re-scan only pays for new or changed files. Sampling checks the file's **head *and* tail**, so same-camera videos no longer force needless full reads. New: **similar-photo detection** via perceptual hashing — catches the same picture saved at a different size/quality (WhatsApp copies, resizes, HEIC vs JPEG) that an exact hash can never see. Each group now **recommends which copy to keep** (highest resolution, most original name/location) with one-click **"keep best, trash the rest"** and a global **"trash all extras"**; long scans can be **canceled**. Hardlinks are no longer miscounted as wasted space |
 | **2.13.2** | **A little more room in the grid** — bumped the spacing between folder/photo tiles (the effective gap was only 3px, which read as cluttered) so the grid breathes without changing tile size |
 | **2.13.1** | **Content-validated uploads** — uploaded files are now checked by their actual **magic bytes**, not just the filename extension, so a script/HTML/executable renamed to `.jpg` is refused (`contents are not a photo or video`). Covers every accepted format including HEIC/HEIF and all video containers, so valid photos/videos are never rejected |
