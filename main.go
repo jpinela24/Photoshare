@@ -885,7 +885,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.15.0"
+const appVersion = "2.15.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1926,6 +1926,9 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}
+		if info.IsDir() && hiddenFolderNames[strings.ToLower(name)] {
+			return filepath.SkipDir
+		}
 		if q != "" && !strings.Contains(strings.ToLower(name), q) {
 			return nil
 		}
@@ -2736,6 +2739,9 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		if info.IsDir() {
+			if hiddenFolderNames[strings.ToLower(info.Name())] {
+				return filepath.SkipDir
+			}
 			if path != baseDir {
 				stats.TotalFolders++
 				rel, _ := filepath.Rel(baseDir, path)
@@ -3244,7 +3250,7 @@ func buildDateIndex() {
 		}
 		if info.IsDir() {
 			lower := strings.ToLower(info.Name())
-			if strings.HasPrefix(info.Name(), ".") || lower == trashLow || lower == uploadLow {
+			if strings.HasPrefix(info.Name(), ".") || lower == trashLow || lower == uploadLow || hiddenFolderNames[lower] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -3462,7 +3468,7 @@ func pregenThumbs() {
 		if info.IsDir() {
 			if strings.HasPrefix(info.Name(), ".") { return filepath.SkipDir }
 			lower := strings.ToLower(info.Name())
-			if lower == trashLow || lower == strings.ToLower(uploadDir) { return filepath.SkipDir }
+			if lower == trashLow || lower == strings.ToLower(uploadDir) || hiddenFolderNames[lower] { return filepath.SkipDir }
 			return nil
 		}
 		if !strings.HasPrefix(info.Name(), ".") && (isImage(info.Name()) || isVideo(info.Name())) {

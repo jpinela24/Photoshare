@@ -359,7 +359,11 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 		}
 		if d.IsDir() {
 			lower := strings.ToLower(name)
-			if lower == trashLower || lower == uploadLower {
+			// Skip housekeeping dirs (trash, upload inbox) and hidden thumbnail
+			// folders ("thumbs" etc.) — a cached thumbnail is always a smaller
+			// copy of its original, so scanning them floods the results with
+			// false "duplicates" the browse view doesn't even show.
+			if lower == trashLower || lower == uploadLower || hiddenFolderNames[lower] {
 				return filepath.SkipDir
 			}
 			return nil
