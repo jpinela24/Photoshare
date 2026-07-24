@@ -161,6 +161,31 @@ func TestDuplicateScanSkipsTrashAndUploads(t *testing.T) {
 	}
 }
 
+// Hidden housekeeping folders ("thumbs") are invisible in the browse view, so
+// the duplicate finder must not scan them either: a cached thumbnail is always
+// a smaller copy of its original and would flood the results with matches
+// against files the user can't even see.
+func TestDuplicateScanSkipsHiddenThumbsFolders(t *testing.T) {
+	lib := dupeTestEnv(t)
+	// Exact-duplicate bait: identical bytes in the library and inside thumbs.
+	content := []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	writeFile(t, filepath.Join(lib, "photo.jpg"), content)
+	writeFile(t, filepath.Join(lib, "thumbs", "photo.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Album", "Thumbs", "photo.jpg"), content) // any depth, any case
+
+	// Similar-duplicate bait: the same picture, full-size vs thumbnail-size.
+	gradientJPEG(t, filepath.Join(lib, "Album", "sunset.jpg"), 640, 480, 92)
+	gradientJPEG(t, filepath.Join(lib, "Album", "Thumbs", "sunset.jpg"), 120, 90, 60)
+
+	exact, similar, _ := computeDuplicates()
+	if len(exact) != 0 {
+		t.Errorf("thumbs folders leaked into exact duplicates: %+v", exact)
+	}
+	if len(similar) != 0 {
+		t.Errorf("thumbs folders leaked into similar photos: %+v", similar)
+	}
+}
+
 // ── Hash cache ───────────────────────────────────────────────────────────────
 
 func TestHashCacheIsPopulatedAndReused(t *testing.T) {
