@@ -2569,7 +2569,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.15.3'
+const APP_VERSION = '2.15.4'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3186,11 +3186,11 @@ export default function App() {
                 {sortDir === 'asc' ? <ArrowUpIcon size={14} /> : <ArrowDownIcon size={14} />}
               </button>
             </div>
-            <div className="toolbar-group">
-              <button className={`grid-size-btn ${gridSize === 'small'  ? 'active' : ''}`} onClick={() => setGridSize('small')}  title="Small"><GridSmallIcon size={15} /></button>
-              <button className={`grid-size-btn ${gridSize === 'medium' ? 'active' : ''}`} onClick={() => setGridSize('medium')} title="Medium"><GridMediumIcon size={15} /></button>
-              <button className={`grid-size-btn ${gridSize === 'large'  ? 'active' : ''}`} onClick={() => setGridSize('large')}  title="Large"><SquareIcon size={15} /></button>
-            </div>
+            <button className="theme-btn"
+              onClick={() => setGridSize(s => s === 'small' ? 'medium' : s === 'medium' ? 'large' : 'small')}
+              title={`Tile size: ${gridSize} (click to change)`}>
+              {gridSize === 'small' ? <GridSmallIcon size={15} /> : gridSize === 'medium' ? <GridMediumIcon size={15} /> : <SquareIcon size={15} />}
+            </button>
             <label className="upload-btn" title="Upload files to inbox">
               <UploadIcon size={16} />
               <input type="file" multiple accept="image/*,video/*,.heic,.heif,.HEIC,.HEIF,.mov,.MOV,.mkv,.MKV,.avi,.wmv,.m4v,.flv,.ts,.webm,image/heic,image/heif,video/quicktime" style={{display:'none'}} onChange={e => { if (e.target.files.length) handleUploadDrop(e.target.files); e.target.value='' }} />
