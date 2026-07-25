@@ -2094,6 +2094,22 @@ body {
   padding: 1px 8px;
 }
 
+/* Upload action inside the sidebar's Upload Inbox row */
+.inbox-upload-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #fbbf24;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+.inbox-upload-btn:hover { background: rgba(251, 191, 36, 0.15); }
+
 /* Multi-select for hand-picked cleanup */
 .dup-check {
   width: 16px;
