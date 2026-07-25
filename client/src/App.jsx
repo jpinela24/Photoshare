@@ -114,6 +114,8 @@ const QrIcon          = (p) => <Svg {...p}><rect x="3" y="3" width="7" height="7
 const SparkleIcon     = (p) => <Svg {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></Svg>
 const MapPinIcon      = (p) => <Svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></Svg>
 const BellIcon        = (p) => <Svg {...p}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></Svg>
+const SearchIcon      = (p) => <Svg {...p}><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></Svg>
+const FilterIcon      = (p) => <Svg {...p}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></Svg>
 
 // ── VideoCard ─────────────────────────────────────────────────────────────────
 // Single-click  → play/pause inline in the grid card
@@ -870,20 +872,10 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
   const [roots, setRoots]       = useState([])
   const [rootInfo, setRootInfo] = useState(null)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [query, setQuery]         = useState('')
-  const [results, setResults]     = useState(null)
-  const [searching, setSearching] = useState(false)
-  const [searchType, setSearchType] = useState('')    // '' | 'image' | 'video'
-  const [searchFrom, setSearchFrom] = useState('')
-  const [searchTo, setSearchTo]     = useState('')
-  const [showFilters, setShowFilters] = useState(false)
-  const [ai, setAi] = useState(null)                  // /api/ai/status, null until known
-  const [smart, setSmart] = useState(false)           // AI (semantic) search on/off
   const [creatingRoot, setCreatingRoot] = useState(false)
   const [rootFolderName, setRootFolderName] = useState('')
   const [rootError, setRootError] = useState(null)
   const rootInputRef  = useRef(null)
-  const inputRef      = useRef(null)
 
   const [pinned, setPinned] = useState(() => {
     try { return JSON.parse(localStorage.getItem('photoshare-pinned') || '[]') }
@@ -932,24 +924,6 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
 
   useEffect(() => { if (creatingRoot) rootInputRef.current?.focus() }, [creatingRoot])
 
-  // AI status — poll while indexing so the progress readout stays live. When AI
-  // isn't configured/healthy the Smart toggle simply never appears.
-  useEffect(() => {
-    let stop = false
-    const tick = () => {
-      fetch('/api/ai/status')
-        .then(r => r.json())
-        .then(s => { if (!stop) setAi(s) })
-        .catch(() => {})
-    }
-    tick()
-    const id = setInterval(tick, 5000)
-    return () => { stop = true; clearInterval(id) }
-  }, [])
-  const aiReady = ai?.enabled && ai?.healthy
-  // Don't leave Smart stuck on if AI goes away.
-  useEffect(() => { if (!aiReady && smart) setSmart(false) }, [aiReady, smart])
-
   const submitRootCreate = async () => {
     const name = rootFolderName.trim()
     if (!name) { setCreatingRoot(false); return }
@@ -962,41 +936,6 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
     setCreatingRoot(false)
     setRootFolderName('')
     refresh()
-  }
-
-  // Debounced search. Smart (semantic) mode hits the AI endpoint by meaning;
-  // it has no filename/type/date filters, so those apply to normal search only.
-  useEffect(() => {
-    const useSmart = smart && aiReady
-    const hasFilters = searchType || searchFrom || searchTo
-    if (!query.trim() && !(hasFilters && !useSmart)) { setResults(null); setSearching(false); return }
-    setSearching(true)
-    const t = setTimeout(() => {
-      let url
-      if (useSmart) {
-        url = `/api/search/semantic?q=${encodeURIComponent(query.trim())}`
-      } else {
-        const params = new URLSearchParams()
-        if (query.trim()) params.set('q', query.trim())
-        if (searchType)   params.set('type', searchType)
-        if (searchFrom)   params.set('from', searchFrom)
-        if (searchTo)     params.set('to', searchTo)
-        url = `/api/search?${params}`
-      }
-      fetch(url)
-        .then(r => r.json())
-        .then(data => { setResults(Array.isArray(data) ? data : []); setSearching(false) })
-        .catch(() => setSearching(false))
-    }, 300)
-    return () => clearTimeout(t)
-  }, [query, searchType, searchFrom, searchTo, smart, aiReady])
-
-  const clearSearch = () => { setQuery(''); setSearchType(''); setSearchFrom(''); setSearchTo(''); setResults(null); setShowFilters(false); inputRef.current?.focus() }
-
-  // Navigate to parent folder of a file result, or into a folder result
-  const handleResultClick = (item) => {
-    onNavigate(item.isDir ? item.path : item.parent)
-    clearSearch()
   }
 
   return (
@@ -1023,71 +962,6 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         </>
       )}
 
-      {/* Search box */}
-      <div className="search-wrap">
-        <span className="search-icon">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="7" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-        </span>
-        <input
-          ref={inputRef}
-          className="search-input"
-          type="text"
-          placeholder={smart ? 'Search by what’s in your photos…' : 'Search files…'}
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-        />
-        {aiReady && (
-          <button
-            className="search-clear"
-            title={smart ? 'Smart search on — matches by image content' : 'Smart search — find photos by what they show'}
-            onClick={() => setSmart(v => !v)}
-            style={{ color: smart ? '#818cf8' : undefined, display: 'flex', alignItems: 'center' }}
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill={smart ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />
-            </svg>
-          </button>
-        )}
-        <button
-          className="search-clear"
-          title="Filters"
-          onClick={() => setShowFilters(v => !v)}
-          style={{ color: showFilters ? '#818cf8' : undefined, display: 'flex', alignItems: 'center' }}
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-          </svg>
-        </button>
-        {(query || searchType || searchFrom || searchTo) && (
-          <button className="search-clear" onClick={clearSearch}><CloseIcon size={14} /></button>
-        )}
-      </div>
-
-      {/* Smart-search status line: indexing progress or a ready hint. */}
-      {aiReady && smart && (
-        <div className="search-status" style={{ padding: '2px 12px 4px', fontSize: '0.7rem', opacity: 0.75 }}>
-          {ai?.running
-            ? `Indexing photos… ${ai.processed}/${ai.total}`
-            : `Smart search over ${ai?.indexed || 0} photo${ai?.indexed === 1 ? '' : 's'}`}
-        </div>
-      )}
-
-      {/* Search filters (normal search only — semantic search ignores them) */}
-      {showFilters && !smart && (
-        <div className="search-filters">
-          <select className="sort-select" style={{flex:'1 1 100%', fontSize:'0.75rem'}} value={searchType} onChange={e => setSearchType(e.target.value)}>
-            <option value="">All types</option>
-            <option value="image">Photos only</option>
-            <option value="video">Videos only</option>
-          </select>
-          <input type="date" className="search-date" value={searchFrom} onChange={e => setSearchFrom(e.target.value)} title="From date" />
-          <input type="date" className="search-date" value={searchTo}   onChange={e => setSearchTo(e.target.value)}   title="To date" />
-        </div>
-      )}
-
       {/* Thumbnail regen button — admin only */}
       {token && (
         <button className="thumb-regen-btn" title="Clear and rebuild all thumbnails" onClick={async () => {
@@ -1095,109 +969,71 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         }}><RefreshIcon size={13} /> Rebuild Thumbnails</button>
       )}
 
-      {/* Search results */}
-      {query.trim() ? (
-        <div className="search-results">
-          {searching && <div className="search-status">Searching…</div>}
-          {!searching && results?.length === 0 && (
-            <div className="search-status">No results for "{query}"</div>
-          )}
-          {!searching && results?.map(item => (
-            <button
-              key={item.path}
-              className="search-result-item"
-              onClick={() => handleResultClick(item)}
-              title={item.path}
-            >
-              <div className="sbi-thumb-wrap">
-                {item.isDir ? (
-                  <div className="sbi-thumb sbi-thumb-icon"><FolderIcon size={22} /></div>
-                ) : (
-                  <img
-                    className="sbi-thumb"
-                    src={`/api/thumb?path=${encodeURIComponent(item.path)}`}
-                    alt={item.name}
-                    loading="lazy"
-                  />
-                )}
-              </div>
-              <div className="sbi-text">
-                <div className="sbi-name search-match">{item.name}</div>
-                <div className="sbi-meta">{item.parent || '/'}</div>
-              </div>
-              {item.isVideo && <span className="search-video-tag">video</span>}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <>
-          {/* Root / All Photos */}
-          <button
-            className={`sbi-all ${currentPath === '' ? 'sbi-active' : ''} ${rootDragOver ? 'sbi-drag-over' : ''}`}
-            onClick={() => onNavigate('')}
-            onDragOver={handleRootDragOver}
-            onDragLeave={() => setRootDragOver(false)}
-            onDrop={handleRootDrop}
-          >
-            <div className="sbi-thumb-wrap">
-              <div className="sbi-thumb sbi-thumb-icon"><HomeIcon /></div>
-            </div>
-            <div className="sbi-text">
-              <div className="sbi-name">All Photos</div>
-              <div className="sbi-meta">{metaLine(rootInfo) ?? '…'}</div>
-            </div>
-          </button>
-
-          {/* Upload Inbox — permanent pinned entry, no edit tools */}
-          <UploadInboxItem
-            folderName={uploadFolderName}
-            currentPath={currentPath}
-            onNavigate={onNavigate}
-            onFileMoved={onFileMoved}
-            onUpload={onUpload}
-          />
-
-          <div className="sidebar-divider" />
-
-          {/* New root folder — admin only */}
-          {token && (
-          <div className="sbi-root-actions">
-            {creatingRoot ? (
-              <div className="sbi-new-folder-row sbi-new-folder-root">
-                <div className="sbi-thumb sbi-thumb-icon" style={{width:44,height:44,flexShrink:0}}><FolderIcon size={22}/></div>
-                <input
-                  ref={rootInputRef}
-                  className="sbi-rename-input"
-                  placeholder="Folder name…"
-                  value={rootFolderName}
-                  onChange={e => setRootFolderName(e.target.value)}
-                  onKeyDown={e => { if (e.key==='Enter') submitRootCreate(); if (e.key==='Escape') { setCreatingRoot(false); setRootFolderName('') }}}
-                  onBlur={submitRootCreate}
-                />
-              </div>
-            ) : (
-              <button className="sbi-new-root-btn" onClick={() => setCreatingRoot(true)}><PlusIcon size={14} /> New Folder</button>
-            )}
-            {rootError && <div className="sbi-folder-error" onClick={() => setRootError(null)}>{rootError} ✕</div>}
+        {/* Root / All Photos */}
+        <button
+          className={`sbi-all ${currentPath === '' ? 'sbi-active' : ''} ${rootDragOver ? 'sbi-drag-over' : ''}`}
+          onClick={() => onNavigate('')}
+          onDragOver={handleRootDragOver}
+          onDragLeave={() => setRootDragOver(false)}
+          onDrop={handleRootDrop}
+        >
+          <div className="sbi-thumb-wrap">
+            <div className="sbi-thumb sbi-thumb-icon"><HomeIcon /></div>
           </div>
-          )}
+          <div className="sbi-text">
+            <div className="sbi-name">All Photos</div>
+            <div className="sbi-meta">{metaLine(rootInfo) ?? '…'}</div>
+          </div>
+        </button>
 
-          <nav className="sidebar-nav">
-            {roots.map(r => (
-              <SidebarItem
-                key={r.path + refreshKey}
-                entry={r}
-                currentPath={currentPath}
-                onNavigate={onNavigate}
-                depth={0}
-                onRefresh={refresh}
-                onFileMoved={onFileMoved}
-                onPin={pin}
+        {/* Upload Inbox — permanent pinned entry, no edit tools */}
+        <UploadInboxItem
+          folderName={uploadFolderName}
+          currentPath={currentPath}
+          onNavigate={onNavigate}
+          onFileMoved={onFileMoved}
+          onUpload={onUpload}
+        />
+
+        <div className="sidebar-divider" />
+
+        {/* New root folder — admin only */}
+        {token && (
+        <div className="sbi-root-actions">
+          {creatingRoot ? (
+            <div className="sbi-new-folder-row sbi-new-folder-root">
+              <div className="sbi-thumb sbi-thumb-icon" style={{width:44,height:44,flexShrink:0}}><FolderIcon size={22}/></div>
+              <input
+                ref={rootInputRef}
+                className="sbi-rename-input"
+                placeholder="Folder name…"
+                value={rootFolderName}
+                onChange={e => setRootFolderName(e.target.value)}
+                onKeyDown={e => { if (e.key==='Enter') submitRootCreate(); if (e.key==='Escape') { setCreatingRoot(false); setRootFolderName('') }}}
+                onBlur={submitRootCreate}
               />
-            ))}
-          </nav>
-        </>
-      )}
+            </div>
+          ) : (
+            <button className="sbi-new-root-btn" onClick={() => setCreatingRoot(true)}><PlusIcon size={14} /> New Folder</button>
+          )}
+          {rootError && <div className="sbi-folder-error" onClick={() => setRootError(null)}>{rootError} ✕</div>}
+        </div>
+        )}
+
+        <nav className="sidebar-nav">
+          {roots.map(r => (
+            <SidebarItem
+              key={r.path + refreshKey}
+              entry={r}
+              currentPath={currentPath}
+              onNavigate={onNavigate}
+              depth={0}
+              onRefresh={refresh}
+              onFileMoved={onFileMoved}
+              onPin={pin}
+            />
+          ))}
+        </nav>
 
       {/* Bottom buttons */}
       <div className="sidebar-divider" style={{marginTop:'auto'}} />
@@ -2534,7 +2370,12 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
 
 // ── AddressBar ────────────────────────────────────────────────────────────────
 
-function AddressBar({ path, onNavigate }) {
+function AddressBar({ path, onNavigate, searchActive }) {
+  // Search spans the whole library, so showing the current folder's crumbs
+  // while its results fill the grid would misrepresent what you're looking at.
+  if (searchActive) {
+    return <div className="address-bar"><span className="address-display"><SearchIcon size={14} /> Search results</span></div>
+  }
   if (path === TRASH_PATH) {
     return <div className="address-bar"><span className="address-display"><TrashIcon size={14} /> Recycle Bin</span></div>
   }
@@ -2592,7 +2433,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.15.6'
+const APP_VERSION = '2.16.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2801,6 +2642,20 @@ export default function App() {
     try { return localStorage.getItem('ps-grid-size') || 'small' } catch { return 'small' }
   })
   useEffect(() => { try { localStorage.setItem('ps-grid-size', gridSize) } catch {} }, [gridSize])
+
+  // ── Search (results render in the main grid, in place of the folder listing) ──
+  const [searchOpen, setSearchOpen]       = useState(false)
+  const [query, setQuery]                 = useState('')
+  const [results, setResults]             = useState(null)
+  const [searching, setSearching]         = useState(false)
+  const [searchType, setSearchType]       = useState('')   // '' | 'image' | 'video'
+  const [searchFrom, setSearchFrom]       = useState('')
+  const [searchTo, setSearchTo]           = useState('')
+  const [showFilters, setShowFilters]     = useState(false)
+  const [ai, setAi]                       = useState(null) // /api/ai/status, null until known
+  const [smart, setSmart]                 = useState(false)
+  const searchInputRef                    = useRef(null)
+
   const [pickerAction, setPickerAction]           = useState(null)
   const [dropZone, setDropZone]                   = useState(false)
   const [uploading, setUploading]                 = useState(false)
@@ -2995,6 +2850,60 @@ export default function App() {
     uploadFiles(files)
   }
 
+  // AI status — poll while indexing so the progress readout stays live. When AI
+  // isn't configured/healthy the Smart toggle simply never appears.
+  useEffect(() => {
+    let stop = false
+    const tick = () => {
+      fetch('/api/ai/status').then(r => r.json())
+        .then(s => { if (!stop) setAi(s) }).catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => { stop = true; clearInterval(id) }
+  }, [])
+  const aiReady = ai?.enabled && ai?.healthy
+  useEffect(() => { if (!aiReady && smart) setSmart(false) }, [aiReady, smart])
+
+  // Debounced search. Smart (semantic) mode matches by meaning and has no
+  // filename/type/date filters, so those apply to normal search only.
+  useEffect(() => {
+    const useSmart = smart && aiReady
+    const hasFilters = searchType || searchFrom || searchTo
+    if (!query.trim() && !(hasFilters && !useSmart)) { setResults(null); setSearching(false); return }
+    setSearching(true)
+    const t = setTimeout(() => {
+      let url
+      if (useSmart) {
+        url = `/api/search/semantic?q=${encodeURIComponent(query.trim())}`
+      } else {
+        const params = new URLSearchParams()
+        if (query.trim()) params.set('q', query.trim())
+        if (searchType)   params.set('type', searchType)
+        if (searchFrom)   params.set('from', searchFrom)
+        if (searchTo)     params.set('to', searchTo)
+        url = `/api/search?${params}`
+      }
+      fetch(url).then(r => r.json())
+        .then(data => { setResults(Array.isArray(data) ? data : []); setSearching(false) })
+        .catch(() => setSearching(false))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [query, searchType, searchFrom, searchTo, smart, aiReady])
+
+  const clearSearch = () => {
+    setQuery(''); setSearchType(''); setSearchFrom(''); setSearchTo('')
+    setResults(null); setShowFilters(false)
+  }
+  const closeSearch = () => { clearSearch(); setSearchOpen(false) }
+  const toggleSearch = () => {
+    if (searchOpen) { closeSearch(); return }
+    setSearchOpen(true)
+    setTimeout(() => searchInputRef.current?.focus(), 0)
+  }
+  // Opening a folder from search results leaves search and lands in that folder.
+  const openFolder = (p) => { closeSearch(); setPath(p) }
+
   const handleFileMoved = useCallback((filePath) => {
     setEntries(prev => prev.filter(e => e.path !== filePath))
     setSelItems(prev => { const n = new Set(prev); n.delete(filePath); return n })
@@ -3029,10 +2938,17 @@ export default function App() {
       default:     return a.name.localeCompare(b.name) * dir
     }
   })
-  // Keep the selectable paths (display order) current for shift-range selection.
-  orderedSelRef.current = sortedEntries.filter(e => !e.isDir).map(e => e.path)
 
-  const media = entries.filter(e => !e.isDir)
+  // When a search is running, its results take over the grid. They arrive in a
+  // meaningful order already (relevance for smart search), and carry no
+  // size/date, so they are shown as-is rather than run through the sorter.
+  const searchActive = searchOpen && !!(query.trim() || searchType || searchFrom || searchTo)
+  const gridItems    = searchActive ? (results || []) : sortedEntries
+
+  // Keep the selectable paths (display order) current for shift-range selection.
+  orderedSelRef.current = gridItems.filter(e => !e.isDir).map(e => e.path)
+
+  const media = gridItems.filter(e => !e.isDir)
   const photoIndex = selected ? media.findIndex(e => e.path === selected.path) : -1
 
   const closeModal  = () => setSelected(null)
@@ -3183,7 +3099,7 @@ export default function App() {
         </button>
 
         {/* Address bar */}
-        <AddressBar path={path} onNavigate={navigate} />
+        <AddressBar path={path} onNavigate={navigate} searchActive={searchActive} />
 
         {/* Pre-gen progress */}
         {pregenStatus?.running && (
@@ -3215,6 +3131,13 @@ export default function App() {
                 {sortDir === 'asc' ? <ArrowUpIcon size={14} /> : <ArrowDownIcon size={14} />}
               </button>
             </div>
+            <button
+              className={`select-toggle ${searchOpen ? 'select-toggle-active' : ''}`}
+              onClick={toggleSearch}
+              title={searchOpen ? 'Close search' : 'Search your library'}
+            >
+              <SearchIcon size={15} />
+            </button>
           </div>
         )}
 
@@ -3254,25 +3177,93 @@ export default function App() {
           {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} />}
           {path === MAP_PATH && <MapView onOpen={setSelected} />}
           {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH ? null : (<>
+          {/* Search bar — opens from the toolbar magnifier, results fill the grid */}
+          {searchOpen && (
+            <div className="grid-search">
+              <div className="grid-search-row">
+                <span className="grid-search-icon"><SearchIcon size={15} /></span>
+                <input
+                  ref={searchInputRef}
+                  className="grid-search-input"
+                  type="text"
+                  placeholder={smart ? 'Search by what’s in your photos…' : 'Search your library…'}
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeSearch() } }}
+                />
+                {aiReady && (
+                  <button
+                    className={`grid-search-btn ${smart ? 'active' : ''}`}
+                    onClick={() => setSmart(v => !v)}
+                    title={smart ? 'Smart search on — matches by image content' : 'Smart search — find photos by what they show'}
+                  ><SparkleIcon size={14} /></button>
+                )}
+                {!smart && (
+                  <button
+                    className={`grid-search-btn ${showFilters ? 'active' : ''}`}
+                    onClick={() => setShowFilters(v => !v)}
+                    title="Filters"
+                  ><FilterIcon size={14} /></button>
+                )}
+                {(query || searchType || searchFrom || searchTo) && (
+                  <button className="grid-search-btn" onClick={clearSearch} title="Clear"><CloseIcon size={14} /></button>
+                )}
+              </div>
+
+              {showFilters && !smart && (
+                <div className="grid-search-filters">
+                  <select className="sort-select" value={searchType} onChange={e => setSearchType(e.target.value)}>
+                    <option value="">All types</option>
+                    <option value="image">Photos only</option>
+                    <option value="video">Videos only</option>
+                  </select>
+                  <input type="date" className="search-date" value={searchFrom} onChange={e => setSearchFrom(e.target.value)} title="From date" />
+                  <input type="date" className="search-date" value={searchTo}   onChange={e => setSearchTo(e.target.value)}   title="To date" />
+                </div>
+              )}
+
+              {aiReady && smart && (
+                <div className="grid-search-hint">
+                  {ai?.running
+                    ? `Indexing photos… ${ai.processed}/${ai.total}`
+                    : `Smart search over ${ai?.indexed || 0} photo${ai?.indexed === 1 ? '' : 's'}`}
+                </div>
+              )}
+              {searchActive && !searching && results && (
+                <div className="grid-search-hint">
+                  {results.length} result{results.length === 1 ? '' : 's'}
+                  {smart ? ' by image content' : ' across your library'}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Status messages */}
           {(batchStatus || uploadStatus) && (
             <div style={{padding:'6px 0'}}><span className="batch-status">{batchStatus || uploadStatus}</span></div>
           )}
-          {loading && (
-            <div className="status"><div className="spinner" /><span>Loading…</span></div>
-          )}
-          {error && <div className="status error">⚠ {error}</div>}
-          {!loading && !error && entries.length === 0 && (
-            <div className="status muted">No photos, videos or folders here.</div>
-          )}
-          {!loading && !error && entries.length > 0 && (
-            <div className={`grid grid-${gridSize} grid-enter`} key={path}>
-              {sortedEntries.map((entry, idx) => (
+          {searchActive ? (<>
+            {searching && <div className="status"><div className="spinner" /><span>Searching…</span></div>}
+            {!searching && gridItems.length === 0 && (
+              <div className="status muted">No results for “{query.trim() || 'those filters'}”.</div>
+            )}
+          </>) : (<>
+            {loading && (
+              <div className="status"><div className="spinner" /><span>Loading…</span></div>
+            )}
+            {error && <div className="status error">⚠ {error}</div>}
+            {!loading && !error && entries.length === 0 && (
+              <div className="status muted">No photos, videos or folders here.</div>
+            )}
+          </>)}
+          {(searchActive ? !searching && gridItems.length > 0 : !loading && !error && entries.length > 0) && (
+            <div className={`grid grid-${gridSize} grid-enter`} key={searchActive ? 'search' : path}>
+              {gridItems.map((entry, idx) => (
                 entry.isVideo
                   ? <VideoCard key={entry.path} entry={entry} onOpenModal={setSelected} playingPath={playingPath} setPlayingPath={setPlayingPath} focused={gridFocus === idx} onFocus={() => setGridFocus(idx)} />
                   : entry.isDir
                   ? (
-                    <div key={entry.path} role="button" tabIndex={0} className={`card card-folder ${gridFocus === idx ? 'card-grid-focus' : ''}`} onClick={() => { setGridFocus(idx); setPath(entry.path) }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGridFocus(idx); setPath(entry.path) } }} title={entry.name} style={{position:'relative'}}>
+                    <div key={entry.path} role="button" tabIndex={0} className={`card card-folder ${gridFocus === idx ? 'card-grid-focus' : ''}`} onClick={() => { setGridFocus(idx); openFolder(entry.path) }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGridFocus(idx); openFolder(entry.path) } }} title={entry.name} style={{position:'relative'}}>
                       <TrashBtn entry={entry} />
                       <FolderThumb folderPath={entry.path} />
                       <div className="card-label">{entry.name}</div>

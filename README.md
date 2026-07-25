@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.15.6** · Linux / Docker · Windows
+**Current version: v2.16.0** · Linux / Docker · Windows
 
 ---
 
@@ -207,6 +207,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.16.0** | **Search moved into the grid** — search now opens from a **magnifier next to the sort controls** instead of living in the sidebar, and results fill the **main grid** as normal photo/folder cards (full-size thumbnails, lightbox, select, delete) rather than a cramped sidebar list. Smart (AI) search and the type/date filters came along; the address bar reads **"Search results"** while a search is active, and opening a folder result jumps there and closes search |
 | **2.15.6** | **Drag files onto the sidebar to upload** — dropping photos/videos from your desktop onto the **Upload Inbox** row uploads them straight to the inbox (the row highlights as you drag over it). Dragging *library* files onto the same row still moves them into the inbox as before — the two drag types are told apart automatically |
 | **2.15.5** | **Cleaner top bar** — the upload button moved out of the toolbar and into the sidebar's **Upload Inbox** row (where uploads actually land), and the tile-size toggle moved to the left cluster next to the theme button. The top bar is now just navigation, view controls, and account |
 | **2.15.4** | **One-button tile size** — the three Small/Medium/Large buttons are now a single toolbar button that **cycles** through the sizes on click, just like the theme toggle. Less toolbar clutter, same three densities, still remembered across reloads |
