@@ -2433,7 +2433,7 @@ function AddressBar({ path, onNavigate, searchActive }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.16.0'
+const APP_VERSION = '2.16.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3077,7 +3077,11 @@ export default function App() {
         <button className="menu-btn" onClick={() => setSidebarOpen(v => !v)} title="Toggle sidebar">
           <MenuIcon />
         </button>
-        <span className="logo">PhotoShare</span>
+        <button
+          className="logo"
+          onClick={() => { closeSearch(); navigate('') }}
+          title="Go to All Photos"
+        >PhotoShare</button>
         <div className="nav-btns">
           <button className="nav-arrow" onClick={goBack}    disabled={!canBack}    title="Back (Alt+Left)">‹</button>
           <button className="nav-arrow" onClick={goForward} disabled={!canForward} title="Forward (Alt+Right)">›</button>
