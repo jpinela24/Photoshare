@@ -809,12 +809,27 @@ function UploadInboxItem({ folderName, currentPath, onNavigate, onFileMoved, onU
       .then(r => r.json()).then(setInfo).catch(() => {})
   }, [folderName])
 
+  // Two very different drags land here: files dragged in from the desktop
+  // (upload them — no login needed, same as the grid drop zone), and library
+  // files dragged within the app (move them into the inbox — admin only).
+  const isFileDrag = (e) => e.dataTransfer.types.includes('Files')
+  const isMoveDrag = (e) => e.dataTransfer.types.includes('application/photo-share')
+
   const handleDragOver = (e) => {
-    if (!e.dataTransfer.types.includes('application/photo-share')) return
+    if (isFileDrag(e) && onUpload) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragOver(true)
+      return
+    }
+    if (!isMoveDrag(e)) return
     e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true)
   }
+
   const handleDrop = async (e) => {
-    e.preventDefault(); setDragOver(false)
+    e.preventDefault(); e.stopPropagation(); setDragOver(false)
+    if (isFileDrag(e) && onUpload) {
+      if (e.dataTransfer.files.length) onUpload(e.dataTransfer.files)
+      return
+    }
     if (!token) return
     const files = parseDragFiles(e)
     if (!files.length) return
@@ -2577,7 +2592,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.15.5'
+const APP_VERSION = '2.15.6'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
