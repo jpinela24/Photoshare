@@ -780,8 +780,13 @@ func dupesCancelHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// POST /api/duplicates/resolve {groups:[hash...], all:bool, kind:"exact"|"similar"}
-// Trashes every file in the named groups except the recommended keeper.
+// POST /api/duplicates/resolve
+//
+//	{groups:[hash...], all:bool, kind:"exact"|"similar"} — trash every file in
+//	    the named groups (or all groups) except the recommended keeper, or
+//	{paths:[path...]} — trash exactly the hand-picked files. Paths must belong
+//	    to the current results and never include a group's recommended keeper,
+//	    so a stale or crafted request can't delete arbitrary library files.
 func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -790,6 +795,7 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 		Groups []string `json:"groups"`
 		All    bool     `json:"all"`
 		Kind   string   `json:"kind"`
+		Paths  []string `json:"paths"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -798,6 +804,10 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 	want := map[string]bool{}
 	for _, g := range body.Groups {
 		want[g] = true
+	}
+	picked := map[string]bool{}
+	for _, p := range body.Paths {
+		picked[p] = true
 	}
 
 	dupes.mu.Lock()
@@ -812,14 +822,19 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 
 	trashed, freed := 0, int64(0)
 	var errs []string
+	done := map[string]bool{} // a file can sit in two groups (exact + similar)
 	for _, g := range pool {
-		if !body.All && !want[g.Hash] {
+		if len(picked) == 0 && !body.All && !want[g.Hash] {
 			continue
 		}
 		for _, f := range g.Files {
-			if f.Best {
+			if f.Best || done[f.Path] {
 				continue // always keep the recommended copy
 			}
+			if len(picked) > 0 && !picked[f.Path] {
+				continue
+			}
+			done[f.Path] = true
 			full, err := safePath(baseDir, f.Path)
 			if err != nil || full == baseDir {
 				errs = append(errs, f.Path+": invalid path")

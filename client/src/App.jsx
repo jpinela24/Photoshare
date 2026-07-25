@@ -1293,7 +1293,14 @@ function DuplicatesView() {
   const [error, setError]       = useState(null)
   const [status, setStatus]     = useState(null)
   const [progress, setProgress] = useState(null) // {phase, processed, total}
+  const [selected, setSelected] = useState(() => new Set()) // paths picked for cleanup
   const pollRef = useRef(null)
+
+  const toggleSelected = (path) => setSelected(prev => {
+    const next = new Set(prev)
+    if (next.has(path)) next.delete(path); else next.add(path)
+    return next
+  })
 
   // The scan runs in the background server-side; we poll for progress so the
   // request never hangs for minutes on a large library.
@@ -1315,7 +1322,7 @@ function DuplicatesView() {
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
 
-  const scan = () => { setData(null); setError(null); setProgress(null); setLoading(true); fetchState(true) }
+  const scan = () => { setData(null); setError(null); setProgress(null); setSelected(new Set()); setLoading(true); fetchState(true) }
 
   useEffect(() => { fetchState(false); return stopPoll }, [])
 
@@ -1352,6 +1359,15 @@ function DuplicatesView() {
 
   const resolveGroup = (group) => resolve({ groups: [group.hash], kind: group.kind }, '')
 
+  const trashSelected = () => {
+    if (!window.confirm(
+      `Move ${selected.size} selected file${selected.size === 1 ? '' : 's'} to the trash?\n\n` +
+      `Nothing is permanently deleted — everything goes to the recycle bin, ` +
+      `where you can restore it.`
+    )) return
+    resolve({ paths: [...selected] }, '')
+  }
+
   const cleanAll = () => {
     if (!window.confirm(
       `Move ${totalExtras} duplicate file${totalExtras === 1 ? '' : 's'} to the trash?\n\n` +
@@ -1377,6 +1393,11 @@ function DuplicatesView() {
             {similarGroups.length > 0 && ` · ${similarGroups.length} similar`}
             {data.totalWaste > 0 && ` · ${fmtBytes(data.totalWaste)} wasted`}
           </span>
+        )}
+        {!loading && token && selected.size > 0 && (
+          <button className="trash-empty-btn" onClick={trashSelected}>
+            <TrashIcon size={13} /> Trash selected ({selected.size})
+          </button>
         )}
         {!loading && token && totalExtras > 0 && (
           <button className="trash-empty-btn" onClick={cleanAll}>
@@ -1451,7 +1472,16 @@ function DuplicatesView() {
         </div>
         <div className="dup-files">
           {group.files.map(file => (
-            <div key={file.path} className={`dup-file ${file.best ? 'dup-keep' : ''}`}>
+            <div key={file.path} className={`dup-file ${file.best ? 'dup-keep' : ''} ${selected.has(file.path) ? 'dup-selected' : ''}`}>
+              {!file.best && token && (
+                <input
+                  type="checkbox"
+                  className="dup-check"
+                  checked={selected.has(file.path)}
+                  onChange={() => toggleSelected(file.path)}
+                  title="Select for cleanup"
+                />
+              )}
               <div className="dup-thumb-wrap">
                 {(isImageExt(file.name) || isVideoExt(file.name)) && (
                   <img className="dup-thumb" src={`/api/thumb?path=${encodeURIComponent(file.path)}`} alt={file.name} loading="lazy" />
@@ -2539,7 +2569,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.15.2'
+const APP_VERSION = '2.15.3'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

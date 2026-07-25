@@ -2094,6 +2094,17 @@ body {
   padding: 1px 8px;
 }
 
+/* Multi-select for hand-picked cleanup */
+.dup-check {
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  accent-color: #6366f1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.dup-file.dup-selected { background: rgba(99, 102, 241, 0.08); }
+
 /* Per-group "keep the best one, bin the rest" action */
 .dup-resolve-btn {
   margin-left: auto;

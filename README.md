@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.15.2** · Linux / Docker · Windows
+**Current version: v2.15.3** · Linux / Docker · Windows
 
 ---
 
@@ -207,6 +207,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.15.3** | **Hand-picked duplicate cleanup** — every non-keeper file in the Duplicate Finder now has a **checkbox**; select any mix across groups and hit **"Trash selected (N)"** to bin exactly those, without touching the rest. Recommended keepers can't be selected, and everything still goes to the recycle bin |
 | **2.15.2** | **Similar photos sorted by match strength** — similar-photo groups in the Duplicate Finder are now ordered by **match percentage, highest first** (recoverable size breaks ties), so the most confident cleanups are always at the top |
 | **2.15.1** | **Thumbnail folders no longer pollute results** — hidden housekeeping folders (`thumbs`, at any depth) were skipped by the browse view but still scanned by the duplicate finder, search, storage stats, On This Day, and the thumbnail pre-generator. A cached thumbnail is by definition a smaller copy of its original, so the duplicate finder saw endless "duplicates" of files you can't even see. All library scanners now skip them consistently |
 | **2.15.0** | **Settings redesigned** — a proper settings dialog with **sidebar navigation** (Library · Server · Notifications · Users · System), each page with clear titles and per-setting descriptions. Checkboxes became real **toggle switches**; rarely-touched options (FFmpeg path, upload folder name, server IP, port) moved into collapsed **Advanced** sections. The **Save & Restart** button and its warning now only appear when something actually changed. Fully responsive — the nav collapses to a top bar on phones |
