@@ -2094,6 +2094,58 @@ body {
   padding: 1px 8px;
 }
 
+/* ── In-grid search (opened from the toolbar magnifier) ────────────────────── */
+.grid-search {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+}
+.grid-search-row { display: flex; align-items: center; gap: 8px; }
+.grid-search-icon { display: flex; color: #71717a; flex-shrink: 0; }
+.grid-search-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-size: 0.95rem;
+  padding: 4px 0;
+}
+.grid-search-input::placeholder { color: #71717a; }
+.grid-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.grid-search-btn:hover { background: var(--glass-border); color: #e4e4e7; }
+.grid-search-btn.active { color: #818cf8; background: rgba(129, 140, 248, 0.14); }
+
+.grid-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-border);
+}
+.grid-search-hint {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: #71717a;
+}
+
 /* Upload action inside the sidebar's Upload Inbox row */
 .inbox-upload-btn {
   margin-left: auto;
