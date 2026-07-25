@@ -799,7 +799,7 @@ function PinnedItem({ pinnedPath, currentPath, onNavigate, onUnpin, onFileMoved 
 
 // ── UploadInboxItem ───────────────────────────────────────────────────────────
 
-function UploadInboxItem({ folderName, currentPath, onNavigate, onFileMoved }) {
+function UploadInboxItem({ folderName, currentPath, onNavigate, onFileMoved, onUpload }) {
   const { token }               = useContext(AdminCtx)
   const [info, setInfo]         = useState(null)
   const [dragOver, setDragOver] = useState(false)
@@ -839,11 +839,18 @@ function UploadInboxItem({ folderName, currentPath, onNavigate, onFileMoved }) {
         <div className="sbi-name" style={{color:'#fbbf24'}}>Upload Inbox</div>
         <div className="sbi-meta">{metaLine(info) ?? '…'}</div>
       </div>
+      {onUpload && (
+        <label className="inbox-upload-btn" title="Upload files to inbox"
+          onClick={e => e.stopPropagation()}>
+          <UploadIcon size={15} />
+          <input type="file" multiple accept="image/*,video/*,.heic,.heif,.HEIC,.HEIF,.mov,.MOV,.mkv,.MKV,.avi,.wmv,.m4v,.flv,.ts,.webm,image/heic,image/heif,video/quicktime" style={{display:'none'}} onChange={e => { if (e.target.files.length) onUpload(e.target.files); e.target.value='' }} />
+        </label>
+      )}
     </button>
   )
 }
 
-function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSettings, uploadFolderName }) {
+function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSettings, uploadFolderName, onUpload }) {
   const { token } = useContext(AdminCtx)
   const [roots, setRoots]       = useState([])
   const [rootInfo, setRootInfo] = useState(null)
@@ -1132,6 +1139,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
             currentPath={currentPath}
             onNavigate={onNavigate}
             onFileMoved={onFileMoved}
+            onUpload={onUpload}
           />
 
           <div className="sidebar-divider" />
@@ -2569,7 +2577,7 @@ function AddressBar({ path, onNavigate }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.15.4'
+const APP_VERSION = '2.15.5'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3149,6 +3157,12 @@ export default function App() {
           {theme === 'dark' ? <MoonIcon size={16} /> : theme === 'light' ? <SunIcon size={16} /> : <MonitorIcon size={16} />}
         </button>
 
+        <button className="theme-btn"
+          onClick={() => setGridSize(s => s === 'small' ? 'medium' : s === 'medium' ? 'large' : 'small')}
+          title={`Tile size: ${gridSize} (click to change)`}>
+          {gridSize === 'small' ? <GridSmallIcon size={15} /> : gridSize === 'medium' ? <GridMediumIcon size={15} /> : <SquareIcon size={15} />}
+        </button>
+
         <button className="theme-btn" onClick={() => setShowQR(true)} title="Connect a phone (QR code)">
           <QrIcon size={16} />
         </button>
@@ -3186,15 +3200,6 @@ export default function App() {
                 {sortDir === 'asc' ? <ArrowUpIcon size={14} /> : <ArrowDownIcon size={14} />}
               </button>
             </div>
-            <button className="theme-btn"
-              onClick={() => setGridSize(s => s === 'small' ? 'medium' : s === 'medium' ? 'large' : 'small')}
-              title={`Tile size: ${gridSize} (click to change)`}>
-              {gridSize === 'small' ? <GridSmallIcon size={15} /> : gridSize === 'medium' ? <GridMediumIcon size={15} /> : <SquareIcon size={15} />}
-            </button>
-            <label className="upload-btn" title="Upload files to inbox">
-              <UploadIcon size={16} />
-              <input type="file" multiple accept="image/*,video/*,.heic,.heif,.HEIC,.HEIF,.mov,.MOV,.mkv,.MKV,.avi,.wmv,.m4v,.flv,.ts,.webm,image/heic,image/heif,video/quicktime" style={{display:'none'}} onChange={e => { if (e.target.files.length) handleUploadDrop(e.target.files); e.target.value='' }} />
-            </label>
           </div>
         )}
 
@@ -3216,7 +3221,7 @@ export default function App() {
 
         {/* Sidebar */}
         <div className={`sidebar-wrap ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
-          <Sidebar currentPath={path} onNavigate={p => { navigate(p); setSidebarOpen(false) }} onFileMoved={handleFileMoved} onShowStats={() => { setShowStats(true); setSidebarOpen(false) }} onShowSettings={() => { setShowSettings(true); setSidebarOpen(false) }} uploadFolderName={uploadFolderName} />
+          <Sidebar currentPath={path} onNavigate={p => { navigate(p); setSidebarOpen(false) }} onFileMoved={handleFileMoved} onShowStats={() => { setShowStats(true); setSidebarOpen(false) }} onShowSettings={() => { setShowSettings(true); setSidebarOpen(false) }} uploadFolderName={uploadFolderName} onUpload={handleUploadDrop} />
         </div>
 
         {/* Main content */}
