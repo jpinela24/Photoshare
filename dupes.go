@@ -665,7 +665,14 @@ func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]d
 			Similarity: (64 - worst) * 100 / 64,
 		})
 	}
-	sort.Slice(groups, func(i, j int) bool { return groups[i].Size > groups[j].Size })
+	// Strongest matches first — those are the ones the user can act on with the
+	// most confidence; recoverable size breaks ties within the same percentage.
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Similarity != groups[j].Similarity {
+			return groups[i].Similarity > groups[j].Similarity
+		}
+		return groups[i].Size > groups[j].Size
+	})
 	return groups
 }
 
