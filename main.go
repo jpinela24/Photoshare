@@ -885,7 +885,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.16.1"
+const appVersion = "2.17.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3940,6 +3940,7 @@ func main() {
 	mux.HandleFunc("/api/stats", protected(getOnly(statsHandler)))
 	mux.HandleFunc("/api/thumbs/status", protected(getOnly(thumbStatusHandler)))
 	mux.HandleFunc("/api/duplicates", protected(getOnly(duplicatesHandler)))
+	mux.HandleFunc("/api/duplicates/folder", protected(getOnly(dupesFolderHandler)))
 	mux.HandleFunc("/api/duplicates/cancel", protected(mutate(http.MethodPost, dupesCancelHandler)))
 	mux.HandleFunc("/api/duplicates/resolve", withCORS(mutate(http.MethodPost, dupesResolveHandler)))
 	mux.HandleFunc("/api/inbox-upload", protected(mutate(http.MethodPost, inboxUploadHandler)))

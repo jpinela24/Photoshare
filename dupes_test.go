@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -183,6 +185,83 @@ func TestDuplicateScanSkipsHiddenThumbsFolders(t *testing.T) {
 	}
 	if len(similar) != 0 {
 		t.Errorf("thumbs folders leaked into similar photos: %+v", similar)
+	}
+}
+
+// ── Folder-scoped check ──────────────────────────────────────────────────────
+
+// A folder check must only report duplicates *within* that folder — a copy
+// living somewhere else in the library is not this folder's problem.
+func TestFolderScopedDuplicatesIgnoreOtherFolders(t *testing.T) {
+	lib := dupeTestEnv(t)
+	content := []byte("cccccccccccccccccccccccccccccccccccc")
+	// Two copies inside Album, one unrelated copy elsewhere.
+	writeFile(t, filepath.Join(lib, "Album", "a.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Album", "a copy.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Other", "a.jpg"), content)
+
+	all := collectCandidates(filepath.Join(lib, "Album"), false)
+	exact, _, _ := analyzeDuplicates(all, nil)
+
+	if len(exact) != 1 {
+		t.Fatalf("got %d groups, want 1: %+v", len(exact), exact)
+	}
+	if len(exact[0].Files) != 2 {
+		t.Errorf("group has %d files, want only the 2 inside Album", len(exact[0].Files))
+	}
+	for _, f := range exact[0].Files {
+		if !strings.HasPrefix(f.Path, "Album/") {
+			t.Errorf("file %q leaked in from outside the scanned folder", f.Path)
+		}
+	}
+
+	// The library-wide scan still sees all three as one group.
+	allLib, _, _ := computeDuplicates()
+	if len(allLib) != 1 || len(allLib[0].Files) != 3 {
+		t.Errorf("library scan = %+v, want one group of 3", allLib)
+	}
+}
+
+// Non-recursive is the default: a duplicate pair sitting in a subfolder must not
+// surface when checking the parent alone.
+func TestFolderScopedNonRecursiveSkipsSubfolders(t *testing.T) {
+	lib := dupeTestEnv(t)
+	content := []byte("dddddddddddddddddddddddddddddddddddd")
+	writeFile(t, filepath.Join(lib, "Album", "Sub", "x.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Album", "Sub", "x copy.jpg"), content)
+
+	shallow, _, _ := analyzeDuplicates(collectCandidates(filepath.Join(lib, "Album"), false), nil)
+	if len(shallow) != 0 {
+		t.Errorf("non-recursive check reached into a subfolder: %+v", shallow)
+	}
+
+	deep, _, _ := analyzeDuplicates(collectCandidates(filepath.Join(lib, "Album"), true), nil)
+	if len(deep) != 1 {
+		t.Errorf("recursive check = %d groups, want 1", len(deep))
+	}
+}
+
+// A folder scan must not disturb the library scan's progress/cancel state.
+func TestFolderScanLeavesGlobalProgressAlone(t *testing.T) {
+	lib := dupeTestEnv(t)
+	content := []byte("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	writeFile(t, filepath.Join(lib, "Album", "p.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Album", "p2.jpg"), content)
+
+	dupes.mu.Lock()
+	dupes.phase = "hashing"
+	dupes.total = 999
+	dupes.mu.Unlock()
+	atomic.StoreInt64(&dupes.processed, 42)
+
+	analyzeDuplicates(collectCandidates(filepath.Join(lib, "Album"), false), nil)
+
+	dupes.mu.Lock()
+	phase, total := dupes.phase, dupes.total
+	dupes.mu.Unlock()
+	if phase != "hashing" || total != 999 || atomic.LoadInt64(&dupes.processed) != 42 {
+		t.Errorf("folder scan clobbered global progress: phase=%q total=%d processed=%d",
+			phase, total, atomic.LoadInt64(&dupes.processed))
 	}
 }
 

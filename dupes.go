@@ -275,9 +275,32 @@ func imageDims(full string) (int, int) {
 	return cfg.Width, cfg.Height
 }
 
-// parallelFor runs fn over items on a pool sized to the machine, bumping the
-// progress counter and bailing out early if the scan was canceled.
-func parallelFor[T any](items []T, fn func(T)) {
+// progressSink lets a scan report progress and be canceled. The library-wide
+// scan wires this to the polled dupeState; a folder scan passes nil, because it
+// runs synchronously inside one request and has nothing to poll — and must not
+// clobber the global scan's progress while it does.
+type progressSink struct {
+	phase    func(string, int64)
+	tick     func()
+	canceled func() bool
+}
+
+var globalProgress = &progressSink{
+	phase:    func(p string, total int64) { dupes.setPhase(p, total) },
+	tick:     func() { atomic.AddInt64(&dupes.processed, 1) },
+	canceled: func() bool { return dupes.canceled() },
+}
+
+func (p *progressSink) setPhase(name string, total int64) {
+	if p != nil {
+		p.phase(name, total)
+	}
+}
+func (p *progressSink) stopped() bool { return p != nil && p.canceled() }
+
+// parallelFor runs fn over items on a pool sized to the machine, reporting
+// progress and bailing out early if the scan was canceled.
+func parallelFor[T any](items []T, prog *progressSink, fn func(T)) {
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8 // disk-bound past this; more threads just thrash
@@ -292,16 +315,18 @@ func parallelFor[T any](items []T, fn func(T)) {
 		go func() {
 			defer wg.Done()
 			for it := range ch {
-				if dupes.canceled() {
+				if prog.stopped() {
 					return
 				}
 				fn(it)
-				atomic.AddInt64(&dupes.processed, 1)
+				if prog != nil {
+					prog.tick()
+				}
 			}
 		}()
 	}
 	for _, it := range items {
-		if dupes.canceled() {
+		if prog.stopped() {
 			break
 		}
 		ch <- it
@@ -338,15 +363,15 @@ func runDuplicateScan() {
 	dupes.mu.Unlock()
 }
 
-func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
-	loadDupCache()
+// collectCandidates gathers the scannable media under root. When recursive is
+// false only root's own files are considered, which is what a "duplicates in
+// this folder" check wants.
+func collectCandidates(root string, recursive bool) []dupCandidate {
 	trashLower := strings.ToLower(filepath.Base(trashDir))
 	uploadLower := strings.ToLower(uploadDir)
 
-	// Pass 1 (index): walk once, stat only. WalkDir avoids the extra stat per
-	// entry that Walk does.
 	var all []dupCandidate
-	filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -358,6 +383,12 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 			return nil
 		}
 		if d.IsDir() {
+			if path == root {
+				return nil
+			}
+			if !recursive {
+				return filepath.SkipDir
+			}
 			lower := strings.ToLower(name)
 			// Skip housekeeping dirs (trash, upload inbox) and hidden thumbnail
 			// folders ("thumbs" etc.) — a cached thumbnail is always a smaller
@@ -383,9 +414,25 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 		})
 		return nil
 	})
+	return all
+}
+
+func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
+	loadDupCache()
+	// Pass 1 (index): walk once, stat only. WalkDir avoids the extra stat per
+	// entry that Walk does.
+	all := collectCandidates(baseDir, true)
 	if dupes.canceled() {
 		return nil, nil, 0
 	}
+	return analyzeDuplicates(all, globalProgress)
+}
+
+// analyzeDuplicates runs the exact funnel (size → head+tail sample → full MD5)
+// and the perceptual pass over a candidate set. Shared by the library-wide scan
+// and the folder-scoped check so both agree on what counts as a duplicate.
+func analyzeDuplicates(all []dupCandidate, prog *progressSink) ([]DuplicateGroup, []DuplicateGroup, int64) {
+	loadDupCache()
 
 	// Group by size — files of different sizes can't be byte-identical.
 	bySize := map[int64][]dupCandidate{}
@@ -400,10 +447,10 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 	}
 
 	// Pass 2 (sample): head+tail fingerprint, in parallel, cache-backed.
-	dupes.setPhase("sampling", int64(len(sampleWork)))
+	prog.setPhase("sampling", int64(len(sampleWork)))
 	var sampleMu sync.Mutex
 	bySample := map[string][]dupCandidate{}
-	parallelFor(sampleWork, func(c dupCandidate) {
+	parallelFor(sampleWork, prog, func(c dupCandidate) {
 		sh := ""
 		if e, ok := cachedEntry(c.rel, c.size, c.modNs); ok && e.Sample != "" {
 			sh = e.Sample
@@ -421,7 +468,7 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 		bySample[key] = append(bySample[key], c)
 		sampleMu.Unlock()
 	})
-	if dupes.canceled() {
+	if prog.stopped() {
 		return nil, nil, 0
 	}
 
@@ -432,10 +479,10 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 			fullWork = append(fullWork, files...)
 		}
 	}
-	dupes.setPhase("hashing", int64(len(fullWork)))
+	prog.setPhase("hashing", int64(len(fullWork)))
 	var fullMu sync.Mutex
 	byFull := map[string][]dupCandidate{}
-	parallelFor(fullWork, func(c dupCandidate) {
+	parallelFor(fullWork, prog, func(c dupCandidate) {
 		fh := ""
 		if e, ok := cachedEntry(c.rel, c.size, c.modNs); ok && e.Full != "" {
 			fh = e.Full
@@ -452,7 +499,7 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 		byFull[fh] = append(byFull[fh], c)
 		fullMu.Unlock()
 	})
-	if dupes.canceled() {
+	if prog.stopped() {
 		return nil, nil, 0
 	}
 
@@ -504,7 +551,7 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 	// Pass 4 (compare): perceptual hashes for near-duplicate photos. Only one
 	// representative per exact group takes part, so an exact duplicate is never
 	// reported twice.
-	similar := findSimilar(all, inExact, repOf, byFull)
+	similar := findSimilar(all, inExact, repOf, byFull, prog)
 
 	if exact == nil {
 		exact = []DuplicateGroup{}
@@ -521,7 +568,7 @@ func computeDuplicates() ([]DuplicateGroup, []DuplicateGroup, int64) {
 // similarThreshold bits of each other.
 const similarThreshold = 7 // out of 64 bits (~89% match or better)
 
-func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]dupCandidate, byFull map[string][]dupCandidate) []DuplicateGroup {
+func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]dupCandidate, byFull map[string][]dupCandidate, prog *progressSink) []DuplicateGroup {
 	// Candidate set: every image that is not part of an exact group, plus one
 	// representative per exact group.
 	copiesOf := map[string]int{}
@@ -542,7 +589,7 @@ func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]d
 		return nil
 	}
 
-	dupes.setPhase("comparing", int64(len(pool)))
+	prog.setPhase("comparing", int64(len(pool)))
 	hashes := make([]uint64, len(pool))
 	okFlag := make([]bool, len(pool))
 	dims := make([][2]int, len(pool))
@@ -550,7 +597,7 @@ func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]d
 	for i := range pool {
 		idx[i] = i
 	}
-	parallelFor(idx, func(i int) {
+	parallelFor(idx, prog, func(i int) {
 		c := pool[i]
 		if e, ok := cachedEntry(c.rel, c.size, c.modNs); ok && e.HasPHash {
 			hashes[i], okFlag[i], dims[i] = e.PHash, true, [2]int{e.Width, e.Height}
@@ -566,7 +613,7 @@ func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]d
 			e.PHash, e.HasPHash, e.Width, e.Height = h, true, w, ht
 		})
 	})
-	if dupes.canceled() {
+	if prog.stopped() {
 		return nil
 	}
 
@@ -770,6 +817,55 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// ── Folder-scoped check ──────────────────────────────────────────────────────
+
+// folderDupes caches the most recent folder scan so /api/duplicates/resolve can
+// validate hand-picked paths against it, exactly as it does for the library-wide
+// results. Without this, cleanup from a folder check would have nothing to
+// verify against.
+var folderDupes struct {
+	mu      sync.Mutex
+	exact   []DuplicateGroup
+	similar []DuplicateGroup
+}
+
+// GET /api/duplicates/folder?path=<rel>[&recursive=1]
+// Duplicate check limited to one folder. It reuses the same funnel and the same
+// hash cache as the library scan, so on a normal folder it's fast enough to run
+// synchronously inside the request — no polling needed.
+func dupesFolderHandler(w http.ResponseWriter, r *http.Request) {
+	rel := r.URL.Query().Get("path")
+	dir, err := safePath(baseDir, rel)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		http.Error(w, "not a folder", http.StatusNotFound)
+		return
+	}
+	recursive := r.URL.Query().Get("recursive") == "1"
+
+	all := collectCandidates(dir, recursive)
+	exact, similar, waste := analyzeDuplicates(all, nil)
+	saveDupCache()
+
+	folderDupes.mu.Lock()
+	folderDupes.exact, folderDupes.similar = exact, similar
+	folderDupes.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"scanning": false,
+		"path":       rel,
+		"recursive":  recursive,
+		"scanned":    len(all),
+		"groups":     exact,
+		"similar":    similar,
+		"totalWaste": waste,
+	})
+}
+
 // POST /api/duplicates/cancel — stop an in-flight scan.
 func dupesCancelHandler(w http.ResponseWriter, r *http.Request) {
 	dupes.mu.Lock()
@@ -819,6 +915,18 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 		pool = append(pool, dupes.similar...)
 	}
 	dupes.mu.Unlock()
+
+	// Results from the most recent folder-scoped check count too, so cleanup
+	// works there as well — still only ever trashing non-keeper files that an
+	// actual scan produced.
+	folderDupes.mu.Lock()
+	if body.Kind != "similar" {
+		pool = append(pool, folderDupes.exact...)
+	}
+	if body.Kind != "exact" {
+		pool = append(pool, folderDupes.similar...)
+	}
+	folderDupes.mu.Unlock()
 
 	trashed, freed := 0, int64(0)
 	var errs []string
