@@ -1145,7 +1145,10 @@ function MemoriesView({ onOpen }) {
 
 // ── DuplicatesView ────────────────────────────────────────────────────────────
 
-function DuplicatesView() {
+// scopePath: when set, checks only that folder instead of the whole library.
+// onClose / recursive apply to the scoped mode.
+function DuplicatesView({ scopePath = null, recursive = false, onClose = null, onToggleRecursive = null }) {
+  const scoped = scopePath !== null
   const { token }               = useContext(AdminCtx)
   const [data, setData]         = useState(null)
   const [loading, setLoading]   = useState(true)
@@ -1161,10 +1164,13 @@ function DuplicatesView() {
     return next
   })
 
-  // The scan runs in the background server-side; we poll for progress so the
-  // request never hangs for minutes on a large library.
+  // The library-wide scan runs in the background server-side and is polled for
+  // progress. A folder check is small enough to answer in one request.
   const fetchState = (rescan) => {
-    fetch('/api/duplicates' + (rescan ? '?rescan=1' : ''))
+    const url = scoped
+      ? `/api/duplicates/folder?path=${encodeURIComponent(scopePath)}${recursive ? '&recursive=1' : ''}`
+      : '/api/duplicates' + (rescan ? '?rescan=1' : '')
+    fetch(url)
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
       .then(d => {
         if (d.error) { stopPoll(); setError(d.error); setLoading(false); return }
@@ -1183,7 +1189,9 @@ function DuplicatesView() {
 
   const scan = () => { setData(null); setError(null); setProgress(null); setSelected(new Set()); setLoading(true); fetchState(true) }
 
-  useEffect(() => { fetchState(false); return stopPoll }, [])
+  // Re-check when the scoped folder changes, so browsing elsewhere and
+  // re-opening the check doesn't show the previous folder's results.
+  useEffect(() => { fetchState(false); return stopPoll }, [scopePath, recursive])
 
   const doDelete = async (file, tok) => {
     await adminFetch(`/api/admin/delete?path=${encodeURIComponent(file.path)}`, tok, { method: 'DELETE' })
@@ -1245,12 +1253,18 @@ function DuplicatesView() {
   return (
     <div className="trash-view">
       <div className="trash-header">
-        <span className="trash-title"><CopyIcon size={16} /> Duplicate Finder</span>
+        <span className="trash-title">
+          <CopyIcon size={16} />
+          {scoped
+            ? <>Duplicates in <span className="dup-scope">{scopePath ? scopePath.split('/').pop() : 'All Photos'}</span></>
+            : 'Duplicate Finder'}
+        </span>
         {data && (
           <span className="trash-count">
             {exactGroups.length} exact
             {similarGroups.length > 0 && ` · ${similarGroups.length} similar`}
             {data.totalWaste > 0 && ` · ${fmtBytes(data.totalWaste)} wasted`}
+            {scoped && data.scanned != null && ` · ${data.scanned} file${data.scanned === 1 ? '' : 's'} checked`}
           </span>
         )}
         {!loading && token && selected.size > 0 && (
@@ -1266,8 +1280,18 @@ function DuplicatesView() {
         {!loading && (
           <button className="trash-empty-btn" onClick={scan} style={{background:'none',borderColor:'#3730a3',color:'#a5b4fc'}}><RefreshIcon size={13} /> Re-scan</button>
         )}
-        {loading && (
+        {loading && !scoped && (
           <button className="trash-empty-btn" onClick={cancelScan} style={{background:'none',borderColor:'#52525b',color:'#a1a1aa'}}>Cancel</button>
+        )}
+        {onToggleRecursive && (
+          <button className="trash-empty-btn" onClick={onToggleRecursive}
+            style={{background:'none', borderColor: recursive ? '#3730a3' : '#52525b', color: recursive ? '#a5b4fc' : '#a1a1aa'}}
+            title={recursive ? 'Checking this folder and everything inside it' : 'Checking this folder only — click to include subfolders'}>
+            <FolderIcon size={13} /> {recursive ? 'Including subfolders' : 'This folder only'}
+          </button>
+        )}
+        {onClose && (
+          <button className="trash-empty-btn" onClick={onClose} style={{background:'none',borderColor:'#52525b',color:'#a1a1aa'}}><CloseIcon size={13} /> Back to folder</button>
         )}
         {status && <span className="batch-status">{status}</span>}
       </div>
@@ -1289,7 +1313,10 @@ function DuplicatesView() {
 
       {error && <div className="status error">⚠ {error}</div>}
       {!loading && !error && exactGroups.length === 0 && similarGroups.length === 0 && (
-        <div className="status muted">✓ No duplicates or similar photos found.</div>
+        <div className="status muted">
+          ✓ No duplicates or similar photos {scoped ? 'in this folder' : 'found'}.
+          {scoped && !recursive && ' (subfolders not checked)'}
+        </div>
       )}
 
       {!loading && !error && exactGroups.length > 0 && (
@@ -2370,7 +2397,12 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
 
 // ── AddressBar ────────────────────────────────────────────────────────────────
 
-function AddressBar({ path, onNavigate, searchActive }) {
+function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
+  // The scoped duplicate check still "lives" in the current folder, so keep the
+  // crumbs but flag what's being shown.
+  if (folderDupes) {
+    return <div className="address-bar"><span className="address-display"><CopyIcon size={14} /> Duplicates in {path ? path.split('/').pop() : 'All Photos'}</span></div>
+  }
   // Search spans the whole library, so showing the current folder's crumbs
   // while its results fill the grid would misrepresent what you're looking at.
   if (searchActive) {
@@ -2433,7 +2465,7 @@ function AddressBar({ path, onNavigate, searchActive }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.16.1'
+const APP_VERSION = '2.17.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2655,6 +2687,10 @@ export default function App() {
   const [ai, setAi]                       = useState(null) // /api/ai/status, null until known
   const [smart, setSmart]                 = useState(false)
   const searchInputRef                    = useRef(null)
+
+  // Duplicate check limited to the folder you're currently browsing.
+  const [folderDupes, setFolderDupes]         = useState(false)
+  const [folderDupesDeep, setFolderDupesDeep] = useState(false)
 
   const [pickerAction, setPickerAction]           = useState(null)
   const [dropZone, setDropZone]                   = useState(false)
@@ -3103,7 +3139,7 @@ export default function App() {
         </button>
 
         {/* Address bar */}
-        <AddressBar path={path} onNavigate={navigate} searchActive={searchActive} />
+        <AddressBar path={path} onNavigate={navigate} searchActive={searchActive} folderDupes={folderDupes} />
 
         {/* Pre-gen progress */}
         {pregenStatus?.running && (
@@ -3141,6 +3177,13 @@ export default function App() {
               title={searchOpen ? 'Close search' : 'Search your library'}
             >
               <SearchIcon size={15} />
+            </button>
+            <button
+              className={`select-toggle ${folderDupes ? 'select-toggle-active' : ''}`}
+              onClick={() => { closeSearch(); setFolderDupes(v => !v) }}
+              title={folderDupes ? 'Back to this folder' : 'Find duplicates in this folder'}
+            >
+              <CopyIcon size={15} />
             </button>
           </div>
         )}
@@ -3180,7 +3223,14 @@ export default function App() {
           {path === DUPES_PATH && <DuplicatesView />}
           {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} />}
           {path === MAP_PATH && <MapView onOpen={setSelected} />}
-          {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH ? null : (<>
+          {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH ? null : folderDupes ? (
+            <DuplicatesView
+              scopePath={path}
+              recursive={folderDupesDeep}
+              onClose={() => setFolderDupes(false)}
+              onToggleRecursive={() => setFolderDupesDeep(v => !v)}
+            />
+          ) : (<>
           {/* Search bar — opens from the toolbar magnifier, results fill the grid */}
           {searchOpen && (
             <div className="grid-search">
