@@ -3483,8 +3483,13 @@ body {
    simply ran off the right edge (the sort dropdown and account controls were
    unreachable). On narrow screens it now breaks into two rows:
 
-     row 1   menu · PhotoShare · ‹ › ······· theme · tiles · account · log out
-     row 2   address bar ················································ tools
+     row 1   menu · PhotoShare ····· theme · tiles · sort · account · log out
+     row 2   ‹ › · address bar ··················· select · search · duplicates
+
+   Sort rides on row 1 with the other view preferences: it is the only tool
+   with a text label, so it was the heaviest thing on the path row. The back /
+   forward arrows take its place next to the address bar, where a browser
+   would put them.
 
    Ordering is done with flex `order` + a zero-height break element, so the
    desktop markup order — and therefore the desktop layout — is untouched.
@@ -3500,25 +3505,33 @@ body {
     height: auto;
     min-height: 52px;
     padding: 5px 8px;
-    gap: 5px;
+    gap: 4px;
   }
 
+  /* Unwrap the tool cluster so its buttons become flex items of the bar
+     itself and can be split across the two rows individually. */
+  .topbar-toolbar  { display: contents; }
+
   .menu-btn        { order: 1; }
-  .logo            { order: 2; font-size: 0.88rem; }
-  .nav-btns        { order: 3; }
-  .theme-btn       { order: 4; }
-  .tile-btn        { order: 5; }
+  .logo            { order: 2; font-size: 0.82rem; }
+  .theme-btn       { order: 3; }
+  .tile-btn        { order: 4; }
   .qr-btn          { display: none; } /* "connect a phone" — you're on the phone */
+  .toolbar-group   { order: 5; }
   .topbar-right    { order: 6; margin-left: auto; gap: 5px; }
   .topbar-break    { order: 7; display: block; flex-basis: 100%; height: 0; margin: 0; }
-  .address-bar     { order: 8; flex: 1 1 120px; min-width: 0; }
-  .pregen-progress { order: 9; }
-  .topbar-toolbar  { order: 10; gap: 4px; }
+  .nav-btns        { order: 8; }
+  .address-bar     { order: 9; flex: 1 1 120px; min-width: 0; }
+  .pregen-progress { order: 10; }
+  /* multi-select, search and duplicates — they keep their source order */
+  .select-toggle   { order: 11; }
 
   /* The lock/unlock icon already says the role; the name is the first thing
      to go when space is scarce. */
-  .user-name { display: none; }
-  .user-chip { padding: 6px; max-width: none; }
+  /* Scoped to the top-bar chip: `.user-name` is also the Settings → Users
+     list, which must keep showing names. */
+  .user-chip-name { display: none; }
+  .user-chip      { max-width: none; }
 
   /* Touch targets: 30px mouse-sized buttons are hard to hit with a thumb —
      but kept trim enough that both rows survive a 360px-wide phone. */
@@ -3526,10 +3539,11 @@ body {
   .menu-btn,
   .adm-topbtn      { width: 34px; height: 34px; }
   .select-toggle   { display: inline-flex; align-items: center; padding: 8px; }
-  .sort-select     { font-size: 0.76rem; padding: 3px 2px 3px 5px; }
-  .sort-dir-btn    { padding: 7px 6px; }
+  .sort-select     { font-size: 0.74rem; padding: 3px 1px 3px 4px; }
+  .sort-dir-btn    { padding: 7px 5px; }
   .nav-arrow       { min-width: 26px; padding: 4px 6px; }
   .address-bar     { height: 34px; }
+  .user-chip       { padding: 5px; }
 
   .main { padding: 14px 12px 60px; }
 
