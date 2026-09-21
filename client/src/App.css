@@ -2526,7 +2526,7 @@ body {
 
 @media (max-width: 600px) {
   .sidebar-open { width: 220px; }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  /* Tile sizing on phones is density-aware — see the mobile block at the end. */
 }
 
 .settings-version {
@@ -3475,4 +3475,104 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .grid-enter, .grid-enter > * { animation: none !important; filter: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Mobile layout
+   The top bar was a single row of ~11 non-shrinking controls, so on a phone it
+   simply ran off the right edge (the sort dropdown and account controls were
+   unreachable). On narrow screens it now breaks into two rows:
+
+     row 1   menu · PhotoShare · ‹ › ······· theme · tiles · account · log out
+     row 2   address bar ················································ tools
+
+   Ordering is done with flex `order` + a zero-height break element, so the
+   desktop markup order — and therefore the desktop layout — is untouched.
+   Appended last on purpose: this file has several override layers after the
+   base rules, and these need to win over all of them.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.topbar-break { display: none; }
+
+@media (max-width: 768px) {
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 52px;
+    padding: 5px 8px;
+    gap: 5px;
+  }
+
+  .menu-btn        { order: 1; }
+  .logo            { order: 2; font-size: 0.88rem; }
+  .nav-btns        { order: 3; }
+  .theme-btn       { order: 4; }
+  .tile-btn        { order: 5; }
+  .qr-btn          { display: none; } /* "connect a phone" — you're on the phone */
+  .topbar-right    { order: 6; margin-left: auto; gap: 5px; }
+  .topbar-break    { order: 7; display: block; flex-basis: 100%; height: 0; margin: 0; }
+  .address-bar     { order: 8; flex: 1 1 120px; min-width: 0; }
+  .pregen-progress { order: 9; }
+  .topbar-toolbar  { order: 10; gap: 4px; }
+
+  /* The lock/unlock icon already says the role; the name is the first thing
+     to go when space is scarce. */
+  .user-name { display: none; }
+  .user-chip { padding: 6px; max-width: none; }
+
+  /* Touch targets: 30px mouse-sized buttons are hard to hit with a thumb —
+     but kept trim enough that both rows survive a 360px-wide phone. */
+  .theme-btn,
+  .menu-btn,
+  .adm-topbtn      { width: 34px; height: 34px; }
+  .select-toggle   { display: inline-flex; align-items: center; padding: 8px; }
+  .sort-select     { font-size: 0.76rem; padding: 3px 2px 3px 5px; }
+  .sort-dir-btn    { padding: 7px 6px; }
+  .nav-arrow       { min-width: 26px; padding: 4px 6px; }
+  .address-bar     { height: 34px; }
+
+  .main { padding: 14px 12px 60px; }
+
+  /* Drawer floats over the grid instead of pushing it aside — on a phone there
+     isn't room for both, and squeezing the grid re-lays out every tile on each
+     open/close. Positioned (not transformed) on purpose: a transform would
+     become the containing block for any position:fixed child. */
+  .sidebar-wrap {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+  }
+  .sidebar-open { width: 264px; }
+  .sidebar      { width: 264px; }
+
+  .sidebar-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  /* Headers with several action buttons (duplicate finder, recycle bin) need
+     to stack rather than squeeze. */
+  .trash-header { gap: 8px; }
+  .trash-header .trash-count { flex-basis: 100%; }
+}
+
+/* Very narrow phones (iPhone SE and friends): the wordmark is the only purely
+   decorative item left, and the breadcrumb's "⌂ All Photos" is the same home
+   link — dropping it keeps the bar at two rows instead of spilling to four. */
+@media (max-width: 350px) {
+  .logo { display: none; }
+}
+
+/* Phones proper: keep the chosen tile density instead of overriding it.
+   A blanket `.grid { minmax(140px) }` here used to defeat the Small/Medium/
+   Large toggle, so Small looked identical to Medium on a phone. */
+@media (max-width: 600px) {
+  .grid-small  { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+  .grid-medium { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .grid-large  { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
 }

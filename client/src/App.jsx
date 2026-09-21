@@ -2465,7 +2465,7 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.17.0'
+const APP_VERSION = '2.17.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3128,13 +3128,13 @@ export default function App() {
           {theme === 'dark' ? <MoonIcon size={16} /> : theme === 'light' ? <SunIcon size={16} /> : <MonitorIcon size={16} />}
         </button>
 
-        <button className="theme-btn"
+        <button className="theme-btn tile-btn"
           onClick={() => setGridSize(s => s === 'small' ? 'medium' : s === 'medium' ? 'large' : 'small')}
           title={`Tile size: ${gridSize} (click to change)`}>
           {gridSize === 'small' ? <GridSmallIcon size={15} /> : gridSize === 'medium' ? <GridMediumIcon size={15} /> : <SquareIcon size={15} />}
         </button>
 
-        <button className="theme-btn" onClick={() => setShowQR(true)} title="Connect a phone (QR code)">
+        <button className="theme-btn qr-btn" onClick={() => setShowQR(true)} title="Connect a phone (QR code)">
           <QrIcon size={16} />
         </button>
 
@@ -3188,10 +3188,14 @@ export default function App() {
           </div>
         )}
 
+        {/* Wraps the bar onto a second row on phones (see the mobile rules in
+            App.css); collapsed to nothing on desktop. */}
+        <div className="topbar-break" aria-hidden="true" />
+
         <div className="topbar-right">
           <span className="user-chip" title={me.role === 'admin' ? 'Administrator' : 'View-only'}>
             {me.role === 'admin' ? <UnlockIcon size={13} /> : <LockIcon size={13} />}
-            {me.username}
+            <span className="user-name">{me.username}</span>
           </span>
           <button className="adm-topbtn" onClick={handleLogout} title="Log out"><LogoutIcon size={14} /></button>
         </div>
