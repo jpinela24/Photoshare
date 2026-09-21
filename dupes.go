@@ -18,6 +18,7 @@ import (
 	"crypto/md5"
 	"encoding/gob"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -50,6 +51,13 @@ type DupFile struct {
 	// Copies is how many byte-identical copies this entry stands for inside a
 	// "similar" group (it is the representative of its own exact group).
 	Copies int `json:"copies,omitempty"`
+
+	// Scan identity — the proof that the file on disk at cleanup time is still
+	// the one the scan looked at. Deliberately json:"-": these never leave the
+	// server and can never be supplied by a client, so cleanup always compares
+	// against what the scan itself recorded.
+	ModNs int64  `json:"-"` // mtime at scan time, nanosecond precision
+	Ident string `json:"-"` // full content hash at scan time
 }
 
 type DuplicateGroup struct {
@@ -529,7 +537,9 @@ func analyzeDuplicates(all []dupCandidate, prog *progressSink) ([]DuplicateGroup
 		sort.Slice(uniq, func(i, j int) bool { return uniq[i].rel < uniq[j].rel })
 		dfs := make([]DupFile, 0, len(uniq))
 		for _, c := range uniq {
-			dfs = append(dfs, DupFile{Path: c.rel, Name: c.name, Size: c.size, Mod: c.mod})
+			// hash is this group's full content hash by construction.
+			dfs = append(dfs, DupFile{Path: c.rel, Name: c.name, Size: c.size, Mod: c.mod,
+				ModNs: c.modNs, Ident: hash})
 			inExact[c.rel] = true
 		}
 		markBest(dfs, false)
@@ -562,6 +572,55 @@ func analyzeDuplicates(all []dupCandidate, prog *progressSink) ([]DuplicateGroup
 	log.Printf("[DUPES] %d files → %d sample candidates → %d full-hashed → %d exact groups (%s wasted), %d similar groups",
 		len(all), len(sampleWork), len(fullWork), len(exact), fmtSizeGo(totalWaste), len(similar))
 	return exact, similar, totalWaste
+}
+
+// contentIdent returns the file's full content hash, reusing the scan cache so
+// a member of a similar-photo cluster (which the exact funnel may never have
+// full-hashed) still carries an identity cleanup can verify against.
+func contentIdent(c dupCandidate) string {
+	if e, ok := cachedEntry(c.rel, c.size, c.modNs); ok && e.Full != "" {
+		return e.Full
+	}
+	h := fullHash(c.path)
+	if h != "" {
+		updateEntry(c.rel, c.size, c.modNs, func(e *dupEntry) { e.Full = h })
+	}
+	return h
+}
+
+// errChangedSinceScan is returned when the file on disk no longer matches what
+// the scan recorded, so cleanup must not delete it.
+var errChangedSinceScan = errors.New("file changed since scan; rescan required")
+
+// verifyScanIdentity proves the file now at full is byte-for-byte the file the
+// scan saw before it is moved to the trash. Scan results go stale: a file can
+// be edited, replaced, moved away, or recreated between the scan and the
+// cleanup click, and trashing whatever happens to sit at the old path would
+// destroy an unrelated file.
+//
+// The content hash is recomputed rather than trusting size+mtime alone —
+// mtime is cheap to forge and coarse on some filesystems, and this is a
+// destructive path where being slow is much better than being wrong.
+func verifyScanIdentity(full string, f DupFile) error {
+	fi, err := os.Lstat(full)
+	if err != nil {
+		return fmt.Errorf("cannot verify: %w", err)
+	}
+	// Refuse anything that is no longer a plain file (a symlink or directory
+	// could have replaced it since the scan).
+	if !fi.Mode().IsRegular() {
+		return errChangedSinceScan
+	}
+	if fi.Size() != f.Size || fi.ModTime().UnixNano() != f.ModNs {
+		return errChangedSinceScan
+	}
+	if f.Ident == "" {
+		return errors.New("no scan fingerprint recorded; rescan required")
+	}
+	if fullHash(full) != f.Ident {
+		return errChangedSinceScan
+	}
+	return nil
 }
 
 // findSimilar clusters photos whose perceptual hashes are within
@@ -686,6 +745,7 @@ func findSimilar(all []dupCandidate, inExact map[string]bool, repOf map[string]d
 			files = append(files, DupFile{
 				Path: c.rel, Name: c.name, Size: c.size, Mod: c.mod,
 				Width: dims[i][0], Height: dims[i][1], Copies: copiesOf[c.rel],
+				ModNs: c.modNs, Ident: contentIdent(c),
 			})
 		}
 		markBest(files, true)
@@ -778,20 +838,14 @@ func markBest(files []DupFile, preferBigger bool) {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-// GET /api/duplicates          — current state; starts a scan if none has run.
-// GET /api/duplicates?rescan=1 — force a fresh scan.
+// GET /api/duplicates — read-only status and results for the current scan.
+//
+// Reading status never starts work: scanning hashes every file in the library
+// and decodes images, so kicking that off is an admin action behind
+// POST /api/duplicates/scan. Any signed-in user may read the result (they can
+// already browse every file it names).
 func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
-	rescan := r.URL.Query().Get("rescan") == "1"
 	dupes.mu.Lock()
-	if !dupes.running && (dupes.finishedAt.IsZero() || rescan) {
-		dupes.running = true
-		dupes.cancel = false
-		dupes.phase = "indexing"
-		dupes.total = 0
-		atomic.StoreInt64(&dupes.processed, 0)
-		dupes.groups, dupes.similar, dupes.totalWaste, dupes.err = nil, nil, 0, ""
-		go runDuplicateScan()
-	}
 	resp := map[string]any{
 		"scanning":   dupes.running,
 		"phase":      dupes.phase,
@@ -817,6 +871,36 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// POST /api/duplicates/scan {rescan:bool} — start a library-wide scan, or force
+// a fresh one. Admin only: a scan reads and hashes the whole library.
+func dupesScanHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		Rescan bool `json:"rescan"`
+	}
+	json.NewDecoder(r.Body).Decode(&body) // body is optional
+
+	dupes.mu.Lock()
+	started := false
+	if !dupes.running && (dupes.finishedAt.IsZero() || body.Rescan) {
+		dupes.running = true
+		dupes.cancel = false
+		dupes.phase = "indexing"
+		dupes.total = 0
+		atomic.StoreInt64(&dupes.processed, 0)
+		dupes.groups, dupes.similar, dupes.totalWaste, dupes.err = nil, nil, 0, ""
+		started = true
+		go runDuplicateScan()
+	}
+	running := dupes.running
+	dupes.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"started": started, "scanning": running})
+}
+
 // ── Folder-scoped check ──────────────────────────────────────────────────────
 
 // folderDupes caches the most recent folder scan so /api/duplicates/resolve can
@@ -829,12 +913,24 @@ var folderDupes struct {
 	similar []DuplicateGroup
 }
 
-// GET /api/duplicates/folder?path=<rel>[&recursive=1]
-// Duplicate check limited to one folder. It reuses the same funnel and the same
-// hash cache as the library scan, so on a normal folder it's fast enough to run
-// synchronously inside the request — no polling needed.
+// POST /api/duplicates/folder {path, recursive} — duplicate check limited to
+// one folder. It reuses the same funnel and the same hash cache as the library
+// scan, so on a normal folder it's fast enough to run synchronously inside the
+// request — no polling needed. Admin only, and a POST rather than a GET,
+// because it does real hashing/decoding work.
 func dupesFolderHandler(w http.ResponseWriter, r *http.Request) {
-	rel := r.URL.Query().Get("path")
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		Path      string `json:"path"`
+		Recursive bool   `json:"recursive"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	rel := body.Path
 	dir, err := safePath(baseDir, rel)
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
@@ -844,7 +940,7 @@ func dupesFolderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a folder", http.StatusNotFound)
 		return
 	}
-	recursive := r.URL.Query().Get("recursive") == "1"
+	recursive := body.Recursive
 
 	all := collectCandidates(dir, recursive)
 	exact, similar, waste := analyzeDuplicates(all, nil)
@@ -866,8 +962,12 @@ func dupesFolderHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/duplicates/cancel — stop an in-flight scan.
+// POST /api/duplicates/cancel — stop an in-flight scan. Admin only, so a
+// viewer or guest cannot abort an administrator's scan.
 func dupesCancelHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	dupes.mu.Lock()
 	if dupes.running {
 		dupes.cancel = true
@@ -948,6 +1048,12 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 				errs = append(errs, f.Path+": invalid path")
 				continue
 			}
+			// Scan results are a snapshot; never delete on the strength of a
+			// stale one.
+			if err := verifyScanIdentity(full, f); err != nil {
+				errs = append(errs, f.Path+": "+err.Error())
+				continue
+			}
 			if err := moveToTrash(full, f.Path); err != nil {
 				errs = append(errs, f.Path+": "+err.Error())
 				continue
@@ -958,11 +1064,15 @@ func dupesResolveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if trashed > 0 {
 		log.Printf("[DUPES] cleanup trashed %d file(s), freeing %s", trashed, fmtSizeGo(freed))
-		// Results now reference trashed files — drop them so the UI re-scans.
+		// Both result sets now reference trashed files — drop them so nothing
+		// can act on a snapshot we have just invalidated.
 		dupes.mu.Lock()
 		dupes.groups, dupes.similar, dupes.totalWaste = nil, nil, 0
 		dupes.finishedAt = time.Time{}
 		dupes.mu.Unlock()
+		folderDupes.mu.Lock()
+		folderDupes.exact, folderDupes.similar = nil, nil
+		folderDupes.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"trashed": trashed, "freed": freed, "errors": errs})

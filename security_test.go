@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -481,5 +482,389 @@ func TestConcurrentSaveConfig(t *testing.T) {
 	}
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatalf("config corrupted by concurrent writes: %v", err)
+	}
+}
+
+// ── Concurrent uploads of the same filename ──────────────────────────────────
+
+// Two uploads called "photo.jpg" arriving together must both survive. The old
+// code did os.Stat("photo.jpg") and later os.Rename onto it: both uploads saw
+// the name as free, and on Unix the second rename silently replaced the first.
+func TestConcurrentSameNameUploadsDoNotOverwrite(t *testing.T) {
+	dest := t.TempDir()
+	const n = 16
+
+	headers := make([]*multipart.FileHeader, n)
+	want := map[string]bool{}
+	for i := 0; i < n; i++ {
+		payload := fmt.Sprintf("payload-%02d-%s", i, strings.Repeat("x", 128))
+		headers[i] = makeFileHeader(t, "photo.jpg", []byte(payload))
+		want[payload] = true
+	}
+
+	paths := make([]string, n)
+	errsArr := make([]error, n)
+	start := make(chan struct{}) // barrier: release every goroutine at once
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			paths[i], errsArr[i] = saveUploadedFile(headers[i], dest)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	seen := map[string]bool{}
+	for i, err := range errsArr {
+		if err != nil {
+			t.Fatalf("upload %d failed: %v", i, err)
+		}
+		if seen[paths[i]] {
+			t.Errorf("two uploads landed on the same path %q", paths[i])
+		}
+		seen[paths[i]] = true
+	}
+
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file: %s", e.Name())
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dest, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[string(b)] = true
+	}
+	if len(entries) != n {
+		t.Errorf("found %d files, want %d — an upload was overwritten", len(entries), n)
+	}
+	for payload := range want {
+		if !got[payload] {
+			t.Errorf("a payload is missing or was overwritten: %.20s…", payload)
+		}
+	}
+	// One of them should keep the original, unsuffixed name.
+	if _, err := os.Stat(filepath.Join(dest, "photo.jpg")); err != nil {
+		t.Errorf("no upload kept the original filename: %v", err)
+	}
+}
+
+// ── Duplicate endpoints are admin-only ───────────────────────────────────────
+
+// sessionFor returns a cookie for a session with the given role, and registers
+// the matching account so session revalidation accepts it.
+func sessionFor(t *testing.T, role string) *http.Cookie {
+	t.Helper()
+	name := "u-" + role
+	h, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	usersMu.Lock()
+	users = append(users, User{Username: name, PassHash: string(h), Role: role})
+	usersMu.Unlock()
+	tok := sessions.create(name, role)
+	t.Cleanup(func() { sessions.revoke(tok) })
+	return &http.Cookie{Name: sessionCookie, Value: tok}
+}
+
+func TestDuplicateWorkEndpointsRequireAdmin(t *testing.T) {
+	withUsers(t, nil)
+	prevGuest := guestAccess
+	guestAccess = true
+	t.Cleanup(func() { guestAccess = prevGuest })
+
+	admin := sessionFor(t, "admin")
+	viewer := sessionFor(t, "viewer")
+	guestTok := sessions.create("guest", "viewer")
+	t.Cleanup(func() { sessions.revoke(guestTok) })
+	guest := &http.Cookie{Name: sessionCookie, Value: guestTok}
+
+	work := map[string]http.HandlerFunc{
+		"/api/duplicates/scan":    dupesScanHandler,
+		"/api/duplicates/folder":  dupesFolderHandler,
+		"/api/duplicates/cancel":  dupesCancelHandler,
+		"/api/duplicates/resolve": dupesResolveHandler,
+	}
+	for path, h := range work {
+		for _, c := range []struct {
+			who    string
+			cookie *http.Cookie
+			want   int
+		}{
+			{"anonymous", nil, http.StatusUnauthorized},
+			{"viewer", viewer, http.StatusForbidden},
+			{"guest", guest, http.StatusForbidden},
+		} {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			if c.cookie != nil {
+				req.AddCookie(c.cookie)
+			}
+			w := httptest.NewRecorder()
+			h(w, req)
+			if w.Code != c.want {
+				t.Errorf("%s as %s: status = %d, want %d", path, c.who, w.Code, c.want)
+			}
+		}
+		// An admin gets past authorization (any non-401/403 outcome is fine —
+		// the handler's own validation may still reject the empty body).
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.AddCookie(admin)
+		w := httptest.NewRecorder()
+		h(w, req)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Errorf("%s as admin: status = %d, want authorization to pass", path, w.Code)
+		}
+	}
+}
+
+// Reading status must never kick off a scan — that is what made an expensive
+// library-wide hash reachable by any viewer with a GET.
+func TestDuplicateStatusGetDoesNotStartScan(t *testing.T) {
+	dupes.mu.Lock()
+	dupes.running, dupes.finishedAt = false, time.Time{}
+	dupes.groups, dupes.similar = nil, nil
+	dupes.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/duplicates", nil)
+	w := httptest.NewRecorder()
+	duplicatesHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	dupes.mu.Lock()
+	running := dupes.running
+	dupes.mu.Unlock()
+	if running {
+		t.Error("a status GET started a scan")
+	}
+}
+
+// The work endpoints go through the shared POST + same-origin middleware.
+func TestDuplicateWorkEndpointsEnforceMethodAndOrigin(t *testing.T) {
+	for _, path := range []string{
+		"/api/duplicates/scan", "/api/duplicates/folder",
+		"/api/duplicates/cancel", "/api/duplicates/resolve",
+	} {
+		guarded := mutate(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("%s: handler ran when it should have been blocked", path)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		guarded(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s: GET = %d, want 405", path, w.Code)
+		}
+
+		req2 := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req2.Host = "photos.local"
+		req2.Header.Set("Origin", "http://evil.example")
+		w2 := httptest.NewRecorder()
+		guarded(w2, req2)
+		if w2.Code != http.StatusForbidden {
+			t.Errorf("%s: cross-origin POST = %d, want 403", path, w2.Code)
+		}
+	}
+}
+
+// ── Transactional config updates ─────────────────────────────────────────────
+//
+// configMu used to cover only the final write, so a settings save and a user
+// change could each load the same snapshot and the loser's edit vanished.
+
+// configTestEnv points config persistence at a throwaway file.
+func configTestEnv(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "photoshare.config.json")
+	prevPath, prevGuest := configFilePath, guestAccess
+	configFilePath = path
+	usersMu.Lock()
+	prevUsers := users
+	users = nil
+	usersMu.Unlock()
+	t.Cleanup(func() {
+		configFilePath, guestAccess = prevPath, prevGuest
+		usersMu.Lock()
+		users = prevUsers
+		usersMu.Unlock()
+	})
+	return path
+}
+
+func readConfig(t *testing.T, path string) AppConfig {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("config unreadable: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("config is not valid JSON: %v", err)
+	}
+	if fi, err := os.Stat(path); err == nil && runtime.GOOS != "windows" {
+		if fi.Mode().Perm() != 0600 {
+			t.Errorf("config perms = %v, want 0600", fi.Mode().Perm())
+		}
+	}
+	return cfg
+}
+
+// addUser mutates the in-memory list the way the handlers do, then persists.
+func addUser(t *testing.T, name string) error {
+	t.Helper()
+	h, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	usersMu.Lock()
+	users = append(users, User{Username: name, PassHash: string(h), Role: "viewer"})
+	usersMu.Unlock()
+	return persistUsers()
+}
+
+func TestSettingsSaveConcurrentWithUserCreationKeepsBoth(t *testing.T) {
+	path := configTestEnv(t)
+	if err := saveConfig(path, AppConfig{Port: "8080", ShareName: "before"}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var settingsErr, userErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		settingsErr = applySettings(path, AppConfig{Port: "9090", ShareName: "after"})
+	}()
+	go func() { defer wg.Done(); <-start; userErr = addUser(t, "newcomer") }()
+	close(start)
+	wg.Wait()
+
+	if settingsErr != nil || userErr != nil {
+		t.Fatalf("settings=%v user=%v", settingsErr, userErr)
+	}
+	cfg := readConfig(t, path)
+	if cfg.ShareName != "after" || cfg.Port != "9090" {
+		t.Errorf("settings change lost: ShareName=%q Port=%q", cfg.ShareName, cfg.Port)
+	}
+	if len(cfg.Users) != 1 || cfg.Users[0].Username != "newcomer" {
+		t.Errorf("user change lost: %+v", cfg.Users)
+	}
+}
+
+func TestSettingsSaveConcurrentWithGuestAccessKeepsBoth(t *testing.T) {
+	path := configTestEnv(t)
+	guestAccess = false
+	if err := saveConfig(path, AppConfig{Port: "8080"}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var sErr, gErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		sErr = applySettings(path, AppConfig{Port: "8080", ShareName: "memories"})
+	}()
+	go func() { defer wg.Done(); <-start; setGuestAccess(true); gErr = persistUsers() }()
+	close(start)
+	wg.Wait()
+
+	if sErr != nil || gErr != nil {
+		t.Fatalf("settings=%v guest=%v", sErr, gErr)
+	}
+	cfg := readConfig(t, path)
+	if cfg.ShareName != "memories" {
+		t.Errorf("settings change lost: ShareName=%q", cfg.ShareName)
+	}
+	if !cfg.GuestAccess {
+		t.Error("guest-access change lost")
+	}
+}
+
+func TestConcurrentUserChangesLoseNoAccounts(t *testing.T) {
+	path := configTestEnv(t)
+	if err := saveConfig(path, AppConfig{Port: "8080"}); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errsArr := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errsArr[i] = addUser(t, fmt.Sprintf("user%02d", i))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errsArr {
+		if err != nil {
+			t.Fatalf("persist %d failed: %v", i, err)
+		}
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Users) != n {
+		t.Errorf("config has %d accounts, want %d — a concurrent change was lost", len(cfg.Users), n)
+	}
+}
+
+// A failed write must not leave the running server believing a change landed.
+func TestFailedPersistenceRollsBackRuntimeState(t *testing.T) {
+	configTestEnv(t)
+	// Point at a directory that does not exist so the atomic write cannot even
+	// create its temp file.
+	configFilePath = filepath.Join(t.TempDir(), "no-such-dir", "photoshare.config.json")
+
+	withUsers(t, []User{adminUser(t, "admin")})
+	tok := sessions.create("admin", "admin")
+	t.Cleanup(func() { sessions.revoke(tok) })
+
+	body := `{"username":"ghost","password":"pw","role":"viewer"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	usersSaveHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when persistence fails", w.Code)
+	}
+	if _, idx := findUser("ghost"); idx >= 0 {
+		t.Error("runtime state kept an account that was never written to disk")
+	}
+}
+
+func TestFailedGuestAccessPersistenceRollsBack(t *testing.T) {
+	configTestEnv(t)
+	configFilePath = filepath.Join(t.TempDir(), "no-such-dir", "photoshare.config.json")
+	guestAccess = false
+
+	withUsers(t, []User{adminUser(t, "admin")})
+	tok := sessions.create("admin", "admin")
+	t.Cleanup(func() { sessions.revoke(tok) })
+
+	req := httptest.NewRequest(http.MethodPost, "/api/guest-access", strings.NewReader(`{"enabled":true}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	guestAccessHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when persistence fails", w.Code)
+	}
+	if getGuestAccess() {
+		t.Error("guestAccess stayed enabled in memory after the write failed")
 	}
 }
