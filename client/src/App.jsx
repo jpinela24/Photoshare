@@ -2465,7 +2465,7 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.17.2'
+const APP_VERSION = '2.17.3'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3397,8 +3397,8 @@ export default function App() {
 
             {/* Player area */}
             <div className="modal-player">
-              {!selected.isVideo && photoIndex > 0 && (
-                <button className="nav-btn nav-prev" onClick={showPrev}>‹</button>
+              {photoIndex > 0 && (
+                <button className="nav-btn nav-prev" onClick={showPrev} title="Previous (←)">‹</button>
               )}
               {selected.isVideo ? (
                 <video
@@ -3414,8 +3414,8 @@ export default function App() {
                   alt={selected.name}
                 />
               )}
-              {!selected.isVideo && photoIndex < media.length - 1 && (
-                <button className="nav-btn nav-next" onClick={showNext}>›</button>
+              {photoIndex < media.length - 1 && (
+                <button className="nav-btn nav-next" onClick={showNext} title="Next (→)">›</button>
               )}
             </div>
 
