@@ -1164,34 +1164,70 @@ function DuplicatesView({ scopePath = null, recursive = false, onClose = null, o
     return next
   })
 
-  // The library-wide scan runs in the background server-side and is polled for
-  // progress. A folder check is small enough to answer in one request.
-  const fetchState = (rescan) => {
-    const url = scoped
-      ? `/api/duplicates/folder?path=${encodeURIComponent(scopePath)}${recursive ? '&recursive=1' : ''}`
-      : '/api/duplicates' + (rescan ? '?rescan=1' : '')
-    fetch(url)
+  // Scanning hashes the whole library, so starting one is an admin-only POST.
+  // Reading status stays a plain GET that never kicks off work.
+  const applyState = (d) => {
+    if (d.error) { stopPoll(); setError(d.error); setLoading(false); return }
+    if (d.scanning) {
+      setProgress({ phase: d.phase, processed: d.processed, total: d.total })
+      setLoading(true)
+      if (!pollRef.current) pollRef.current = setInterval(pollStatus, 1500)
+    } else {
+      stopPoll(); setData(d); setProgress(null); setLoading(false)
+    }
+  }
+
+  const pollStatus = () => {
+    fetch('/api/duplicates', { credentials: 'same-origin' })
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
-      .then(d => {
-        if (d.error) { stopPoll(); setError(d.error); setLoading(false); return }
-        if (d.scanning) {
-          setProgress({ phase: d.phase, processed: d.processed, total: d.total })
-          setLoading(true)
-          if (!pollRef.current) pollRef.current = setInterval(() => fetchState(false), 1500)
-        } else {
-          stopPoll(); setData(d); setProgress(null); setLoading(false)
-        }
-      })
+      .then(applyState)
+      .catch(e => { stopPoll(); setError(e.message); setLoading(false) })
+  }
+
+  // A folder check is small enough to answer in one request.
+  const runFolderScan = () => {
+    setLoading(true)
+    adminFetch('/api/duplicates/folder', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: scopePath, recursive }),
+    })
+      .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
+      .then(applyState)
+      .catch(e => { stopPoll(); setError(e.message); setLoading(false) })
+  }
+
+  const startScan = (rescan) => {
+    setLoading(true)
+    adminFetch('/api/duplicates/scan', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rescan: !!rescan }),
+    })
+      .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
+      .then(pollStatus)
       .catch(e => { stopPoll(); setError(e.message); setLoading(false) })
   }
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
 
-  const scan = () => { setData(null); setError(null); setProgress(null); setSelected(new Set()); setLoading(true); fetchState(true) }
+  const scan = () => {
+    setData(null); setError(null); setProgress(null); setSelected(new Set()); setLoading(true)
+    if (scoped) runFolderScan(); else startScan(true)
+  }
 
   // Re-check when the scoped folder changes, so browsing elsewhere and
   // re-opening the check doesn't show the previous folder's results.
-  useEffect(() => { fetchState(false); return stopPoll }, [scopePath, recursive])
+  useEffect(() => {
+    if (scoped) { runFolderScan(); return stopPoll }
+    // Read what the server already has; only an admin may start the first scan.
+    fetch('/api/duplicates', { credentials: 'same-origin' })
+      .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
+      .then(d => {
+        const empty = !d.scanning && !(d.groups?.length || d.similar?.length)
+        if (empty && token) startScan(false); else applyState(d)
+      })
+      .catch(e => { stopPoll(); setError(e.message); setLoading(false) })
+    return stopPoll
+  }, [scopePath, recursive])
 
   const doDelete = async (file, tok) => {
     await adminFetch(`/api/admin/delete?path=${encodeURIComponent(file.path)}`, tok, { method: 'DELETE' })
@@ -1277,10 +1313,12 @@ function DuplicatesView({ scopePath = null, recursive = false, onClose = null, o
             <TrashIcon size={13} /> Trash all {totalExtras} extras
           </button>
         )}
-        {!loading && (
+        {/* Scanning and cancelling are admin-only server-side, so don't offer
+            them to a viewer who would just get a 403. */}
+        {!loading && token && (
           <button className="trash-empty-btn" onClick={scan} style={{background:'none',borderColor:'#3730a3',color:'#a5b4fc'}}><RefreshIcon size={13} /> Re-scan</button>
         )}
-        {loading && !scoped && (
+        {loading && !scoped && token && (
           <button className="trash-empty-btn" onClick={cancelScan} style={{background:'none',borderColor:'#52525b',color:'#a1a1aa'}}>Cancel</button>
         )}
         {onToggleRecursive && (

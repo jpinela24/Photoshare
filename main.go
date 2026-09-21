@@ -158,13 +158,38 @@ func loadConfig(path string) AppConfig {
 // save racing a user change) can't interleave and corrupt the file.
 var configMu sync.Mutex
 
+// saveConfig persists cfg, taking the config lock for the duration of the
+// write. Use updateConfig instead whenever the new value is derived from the
+// current one.
 func saveConfig(path string, cfg AppConfig) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	return saveConfigLocked(path, cfg)
+}
+
+// updateConfig runs a read-modify-write against the config file as a single
+// transaction. The file is re-read, mutated and written back while configMu is
+// held, so two concurrent updaters can never both start from the same snapshot
+// and have the loser's change silently overwrite the winner's — which is how a
+// settings save racing a user change used to drop accounts.
+//
+// fn must not call saveConfig/updateConfig (it already holds the lock).
+func updateConfig(path string, fn func(*AppConfig) error) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	cfg := loadConfig(path)
+	if err := fn(&cfg); err != nil {
+		return err
+	}
+	return saveConfigLocked(path, cfg)
+}
+
+// saveConfigLocked writes cfg atomically. The caller must hold configMu.
+func saveConfigLocked(path string, cfg AppConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	configMu.Lock()
-	defer configMu.Unlock()
 	// Write atomically with restrictive permissions: the config can hold secret
 	// webhook tokens, so 0600 (owner-only), and a temp-file-then-rename so a
 	// crash mid-write can never leave a truncated/half-written config.
@@ -479,7 +504,7 @@ func resolveSession(r *http.Request) (*session, bool) {
 		return nil, false
 	}
 	if strings.EqualFold(sess.Username, "guest") {
-		if !guestAccess {
+		if !getGuestAccess() {
 			return nil, false
 		}
 		return &session{Username: "guest", Role: "viewer", Expires: sess.Expires}, true
@@ -861,15 +886,10 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "photo directory does not exist: "+cfg.PhotoDir, http.StatusBadRequest)
 			return
 		}
-		// Accounts are managed via /api/users, not here — preserve them so a
-		// settings save can never wipe the user list or lock anyone out.
-		cfg.AdminPass = ""
-		cfg.AdminPassHash = ""
-		usersMu.Lock()
-		cfg.Users = append([]User(nil), users...)
-		usersMu.Unlock()
-		cfg.GuestAccess = guestAccess
-		if err := saveConfig(configFilePath, cfg); err != nil {
+		// Accounts are managed via /api/users, not here — take them inside the
+		// transaction so a concurrent user change can't be overwritten by this
+		// save (and vice versa).
+		if err := applySettings(configFilePath, cfg); err != nil {
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -952,15 +972,23 @@ func onboardingHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to hash password", http.StatusInternalServerError)
 		return
 	}
-	cfg := loadConfig(configFilePath)
-	cfg.PhotoDir = body.PhotoDir
 	usersMu.Lock()
+	prevUsers := users
 	users = []User{{Username: body.Username, PassHash: hash, Role: "admin"}}
-	cfg.Users = append([]User(nil), users...)
 	usersMu.Unlock()
-	cfg.AdminPass = ""
-	cfg.AdminPassHash = ""
-	if err := saveConfig(configFilePath, cfg); err != nil {
+	if err := updateConfig(configFilePath, func(cfg *AppConfig) error {
+		cfg.PhotoDir = body.PhotoDir
+		usersMu.Lock()
+		cfg.Users = append([]User(nil), users...)
+		usersMu.Unlock()
+		cfg.AdminPass = ""
+		cfg.AdminPassHash = ""
+		return nil
+	}); err != nil {
+		// Don't leave a first admin in memory that never reached disk.
+		usersMu.Lock()
+		users = prevUsers
+		usersMu.Unlock()
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1642,13 +1670,8 @@ func saveUploadedFile(fh *multipart.FileHeader, destDir string) (string, error) 
 	}
 	defer src.Close()
 
-	dest := filepath.Join(destDir, filepath.Base(fh.Filename))
-	if _, err := os.Stat(dest); err == nil {
-		ext := filepath.Ext(dest)
-		base := strings.TrimSuffix(filepath.Base(dest), ext)
-		dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
-	}
-
+	// Stream to a hidden temp file first, so a complete payload exists before
+	// any name a browser could list appears in the library.
 	tmp, err := os.CreateTemp(destDir, ".upload-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create temp: %w", err)
@@ -1663,11 +1686,63 @@ func saveUploadedFile(fh *multipart.FileHeader, destDir string) (string, error) 
 		os.Remove(tmpName)
 		return "", fmt.Errorf("close: %w", err)
 	}
+
+	dest, err := reserveDest(destDir, filepath.Base(fh.Filename))
+	if err != nil {
+		os.Remove(tmpName)
+		return "", fmt.Errorf("reserve name: %w", err)
+	}
+	// The rename replaces the placeholder we exclusively own, so it cannot
+	// clobber another upload's file.
 	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
+		os.Remove(dest)
 		return "", fmt.Errorf("finalize: %w", err)
 	}
 	return dest, nil
+}
+
+// reserveDest atomically claims a free filename in destDir and leaves an empty
+// placeholder holding it.
+//
+// Checking os.Stat and then renaming is a TOCTOU race: two concurrent uploads
+// of the same filename both see the name as free, and the second os.Rename
+// silently replaces the first upload (POSIX rename overwrites). Claiming the
+// name with O_CREATE|O_EXCL instead makes allocation atomic — exactly one
+// caller can win a given name — and works on every filesystem, unlike
+// hardlink-based tricks that fail on FAT/exFAT and some network shares.
+//
+// The placeholder is visible only for the moment between this call and the
+// caller's rename, because the payload is already written by then.
+func reserveDest(destDir, name string) (string, error) {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if base == "" {
+		base = "upload"
+	}
+	for i := 0; i < 100; i++ {
+		cand := filepath.Join(destDir, base+ext)
+		if i > 0 {
+			cand = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, i, ext))
+		}
+		f, err := os.OpenFile(cand, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			f.Close()
+			return cand, nil
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+	}
+	// Pathological contention on the same name — let the OS pick a unique one
+	// (CreateTemp is itself O_EXCL, so this always terminates).
+	f, err := os.CreateTemp(destDir, base+"_*"+ext)
+	if err != nil {
+		return "", err
+	}
+	p := f.Name()
+	f.Close()
+	return p, nil
 }
 
 func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -2882,7 +2957,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var username, role string
 	if body.Guest {
-		if !guestAccess {
+		if !getGuestAccess() {
 			http.Error(w, "guest access disabled", http.StatusForbidden)
 			return
 		}
@@ -2918,7 +2993,7 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/me — who am I + whether guest login is offered
 func meHandler(w http.ResponseWriter, r *http.Request) {
-	resp := map[string]any{"authenticated": false, "guestAccess": guestAccess}
+	resp := map[string]any{"authenticated": false, "guestAccess": getGuestAccess()}
 	if sess, ok := resolveSession(r); ok {
 		resp["authenticated"] = true
 		resp["username"] = sess.Username
@@ -2932,15 +3007,53 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 // ── User management (admin only) ─────────────────────────────────────────────
 
 // persistUsers saves the current users + guestAccess into the config file.
-func persistUsers() error {
-	cfg := loadConfig(configFilePath)
+// guestAccess is flipped at runtime by an admin while request handlers read it
+// concurrently, so it shares usersMu with the account list it is persisted
+// alongside. Callers must not already hold usersMu (it is not reentrant).
+func getGuestAccess() bool {
 	usersMu.Lock()
-	cfg.Users = append([]User(nil), users...)
+	defer usersMu.Unlock()
+	return guestAccess
+}
+
+func setGuestAccess(v bool) {
+	usersMu.Lock()
+	guestAccess = v
 	usersMu.Unlock()
-	cfg.GuestAccess = guestAccess
-	cfg.AdminPass = ""     // ensure no stray plaintext
-	cfg.AdminPassHash = "" // superseded by the users list
-	return saveConfig(configFilePath, cfg)
+}
+
+// applySettings persists a settings form submission. Accounts and guest access
+// are read inside the transaction rather than baked into the caller's snapshot,
+// so a user change committed while this request was in flight survives instead
+// of being overwritten by a stale copy of the user list.
+func applySettings(path string, posted AppConfig) error {
+	return updateConfig(path, func(cur *AppConfig) error {
+		settings := posted
+		settings.AdminPass = ""
+		settings.AdminPassHash = ""
+		usersMu.Lock()
+		settings.Users = append([]User(nil), users...)
+		usersMu.Unlock()
+		settings.GuestAccess = getGuestAccess()
+		*cur = settings
+		return nil
+	})
+}
+
+// persistUsers writes the in-memory account state into the config file without
+// disturbing the system settings already on disk. The accounts are read inside
+// the transaction so a settings save can't interleave between the read and the
+// write.
+func persistUsers() error {
+	return updateConfig(configFilePath, func(cfg *AppConfig) error {
+		usersMu.Lock()
+		cfg.Users = append([]User(nil), users...)
+		usersMu.Unlock()
+		cfg.GuestAccess = getGuestAccess()
+		cfg.AdminPass = ""     // ensure no stray plaintext
+		cfg.AdminPassHash = "" // superseded by the users list
+		return nil
+	})
 }
 
 // GET /api/users — list accounts (no hashes)
@@ -2955,7 +3068,7 @@ func usersListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	usersMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"users": out, "guestAccess": guestAccess})
+	json.NewEncoder(w).Encode(map[string]any{"users": out, "guestAccess": getGuestAccess()})
 }
 
 // POST /api/users {username,password,role} — add or update an account
@@ -3002,6 +3115,7 @@ func usersSaveHandler(w http.ResponseWriter, r *http.Request) {
 	roleChanged := idx >= 0 && existing.Role != body.Role
 	passwordChanged := body.Password != ""
 	usersMu.Lock()
+	prevUsers := append([]User(nil), users...)
 	if idx >= 0 {
 		users[idx] = User{Username: body.Username, PassHash: hash, Role: body.Role}
 	} else {
@@ -3009,6 +3123,10 @@ func usersSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	usersMu.Unlock()
 	if err := persistUsers(); err != nil {
+		// Roll back so the running server never disagrees with what is on disk.
+		usersMu.Lock()
+		users = prevUsers
+		usersMu.Unlock()
 		http.Error(w, "failed to save users: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3036,9 +3154,14 @@ func usersDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usersMu.Lock()
-	users = append(users[:idx], users[idx+1:]...)
+	prevUsers := append([]User(nil), users...)
+	users = append(users[:idx:idx], users[idx+1:]...)
 	usersMu.Unlock()
 	if err := persistUsers(); err != nil {
+		// Roll back so the running server never disagrees with what is on disk.
+		usersMu.Lock()
+		users = prevUsers
+		usersMu.Unlock()
 		http.Error(w, "failed to save users: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3055,12 +3178,15 @@ func guestAccessHandler(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	guestAccess = body.Enabled
+	prevGuest := getGuestAccess()
+	setGuestAccess(body.Enabled)
 	if err := persistUsers(); err != nil {
+		// Roll back so the running server never disagrees with what is on disk.
+		setGuestAccess(prevGuest)
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !guestAccess {
+	if !body.Enabled {
 		sessions.revokeUser("guest") // disabling guest access logs out active guests
 	}
 	w.WriteHeader(http.StatusOK)
@@ -3718,7 +3844,7 @@ func main() {
 
 	// Load accounts and migrate the legacy single admin password into a user.
 	users = append([]User(nil), cfg.Users...)
-	guestAccess = cfg.GuestAccess
+	setGuestAccess(cfg.GuestAccess)
 
 	// Resolve a legacy/seed admin hash (flag > stored hash > config plaintext > env).
 	// Seed-password precedence: -admin-password flag > ADMIN_PASSWORD env >
@@ -3779,7 +3905,7 @@ func main() {
 		cfg.AdminPass = ""     // fully migrated to the users list
 		cfg.AdminPassHash = "" // ditto
 		cfg.Users = users
-		cfg.GuestAccess = guestAccess
+		cfg.GuestAccess = getGuestAccess()
 		saveConfig(configFilePath, cfg)
 		log.Printf("Wrote config: %s", configFilePath)
 	}
@@ -3939,9 +4065,14 @@ func main() {
 	// ── Content (require a valid session — any role) ──
 	mux.HandleFunc("/api/stats", protected(getOnly(statsHandler)))
 	mux.HandleFunc("/api/thumbs/status", protected(getOnly(thumbStatusHandler)))
+	// Read-only status is open to any session; everything that actually scans,
+	// cancels or deletes is admin-gated inside the handler (401 without a
+	// session, 403 for a non-admin) and goes through the POST + same-origin
+	// middleware.
 	mux.HandleFunc("/api/duplicates", protected(getOnly(duplicatesHandler)))
-	mux.HandleFunc("/api/duplicates/folder", protected(getOnly(dupesFolderHandler)))
-	mux.HandleFunc("/api/duplicates/cancel", protected(mutate(http.MethodPost, dupesCancelHandler)))
+	mux.HandleFunc("/api/duplicates/scan", withCORS(mutate(http.MethodPost, dupesScanHandler)))
+	mux.HandleFunc("/api/duplicates/folder", withCORS(mutate(http.MethodPost, dupesFolderHandler)))
+	mux.HandleFunc("/api/duplicates/cancel", withCORS(mutate(http.MethodPost, dupesCancelHandler)))
 	mux.HandleFunc("/api/duplicates/resolve", withCORS(mutate(http.MethodPost, dupesResolveHandler)))
 	mux.HandleFunc("/api/inbox-upload", protected(mutate(http.MethodPost, inboxUploadHandler)))
 	mux.HandleFunc("/api/admin/notify-test", protected(mutate(http.MethodPost, notifyTestHandler)))

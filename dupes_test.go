@@ -4,9 +4,12 @@ package main
 // near-duplicate clustering, the keep-best recommendation, and the hash cache.
 
 import (
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -431,5 +434,198 @@ func TestHardlinksAreNotCountedAsDuplicates(t *testing.T) {
 	}
 	if waste != 0 {
 		t.Errorf("waste = %d, want 0 — deleting a hardlink frees nothing", waste)
+	}
+}
+
+// ── Cleanup safety: scan results go stale ────────────────────────────────────
+//
+// dupesResolveHandler deletes files on the strength of a previous scan. These
+// tests cover the window between scanning and clicking "trash": if the file at
+// a recorded path is no longer the file that was scanned, cleanup must refuse.
+
+// scanAndPublish runs a library scan and installs the result as the server-side
+// state that cleanup validates against, exactly as runDuplicateScan does.
+func scanAndPublish(t *testing.T) []DuplicateGroup {
+	t.Helper()
+	exact, similar, _ := computeDuplicates()
+	dupes.mu.Lock()
+	dupes.groups, dupes.similar = exact, similar
+	dupes.mu.Unlock()
+	folderDupes.mu.Lock()
+	folderDupes.exact, folderDupes.similar = nil, nil
+	folderDupes.mu.Unlock()
+	t.Cleanup(func() {
+		dupes.mu.Lock()
+		dupes.groups, dupes.similar = nil, nil
+		dupes.mu.Unlock()
+	})
+	return exact
+}
+
+// resolveAsAdmin posts body to the cleanup endpoint with an admin session.
+func resolveAsAdmin(t *testing.T, body string) (int, map[string]any) {
+	t.Helper()
+	tok := sessions.create("admin", "admin")
+	t.Cleanup(func() { sessions.revoke(tok) })
+	req := httptest.NewRequest(http.MethodPost, "/api/duplicates/resolve", strings.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	dupesResolveHandler(w, req)
+	var out map[string]any
+	json.Unmarshal(w.Body.Bytes(), &out)
+	return w.Code, out
+}
+
+// keeperAndExtra returns the recommended-keep path and the first non-keeper.
+func keeperAndExtra(t *testing.T, g DuplicateGroup) (string, string) {
+	t.Helper()
+	var keep, extra string
+	for _, f := range g.Files {
+		if f.Best && keep == "" {
+			keep = f.Path
+		} else if !f.Best && extra == "" {
+			extra = f.Path
+		}
+	}
+	if keep == "" || extra == "" {
+		t.Fatalf("group needs a keeper and an extra, got %+v", g.Files)
+	}
+	return keep, extra
+}
+
+func dupePairEnv(t *testing.T) (lib string, group DuplicateGroup) {
+	t.Helper()
+	lib = dupeTestEnv(t)
+	withUsers(t, []User{adminUser(t, "admin")})
+	content := []byte("duplicate-payload-" + strings.Repeat("z", 200))
+	writeFile(t, filepath.Join(lib, "Album", "photo.jpg"), content)
+	writeFile(t, filepath.Join(lib, "Album", "photo copy.jpg"), content)
+	groups := scanAndPublish(t)
+	if len(groups) != 1 {
+		t.Fatalf("setup: got %d exact groups, want 1", len(groups))
+	}
+	return lib, groups[0]
+}
+
+func TestCleanupTrashesUnchangedDuplicate(t *testing.T) {
+	lib, g := dupePairEnv(t)
+	keep, extra := keeperAndExtra(t, g)
+
+	code, out := resolveAsAdmin(t, `{"all":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if n, _ := out["trashed"].(float64); n != 1 {
+		t.Errorf("trashed = %v, want 1 (errors: %v)", out["trashed"], out["errors"])
+	}
+	if _, err := os.Stat(filepath.Join(lib, filepath.FromSlash(extra))); !os.IsNotExist(err) {
+		t.Errorf("the extra copy %q was not trashed", extra)
+	}
+	if _, err := os.Stat(filepath.Join(lib, filepath.FromSlash(keep))); err != nil {
+		t.Errorf("the recommended keeper %q must survive: %v", keep, err)
+	}
+}
+
+// The nastiest case: same path, same size, same mtime — but different bytes.
+// Only re-hashing the content catches this, which is why mtime alone isn't
+// enough to authorise a delete.
+func TestCleanupRefusesFileReplacedAtSamePath(t *testing.T) {
+	lib, g := dupePairEnv(t)
+	_, extra := keeperAndExtra(t, g)
+	victim := filepath.Join(lib, filepath.FromSlash(extra))
+
+	fi, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "REPLACED-unrelated-"
+	replacement := []byte(marker + strings.Repeat("q", int(fi.Size())-len(marker)))
+	if len(replacement) != int(fi.Size()) {
+		t.Fatalf("test needs a same-size replacement: %d vs %d", len(replacement), fi.Size())
+	}
+	if err := os.WriteFile(victim, replacement, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Put the timestamp back so size+mtime look untouched.
+	if err := os.Chtimes(victim, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, out := resolveAsAdmin(t, `{"all":true}`)
+	if n, _ := out["trashed"].(float64); n != 0 {
+		t.Errorf("trashed = %v, want 0 — a replaced file must not be deleted", out["trashed"])
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != string(replacement) {
+		t.Errorf("the replacement file was destroyed (err=%v)", err)
+	}
+	if errs, _ := out["errors"].([]any); len(errs) == 0 {
+		t.Error("expected a per-file error explaining the refusal")
+	}
+}
+
+func TestCleanupRefusesModifiedFile(t *testing.T) {
+	lib, g := dupePairEnv(t)
+	_, extra := keeperAndExtra(t, g)
+	victim := filepath.Join(lib, filepath.FromSlash(extra))
+
+	if err := os.WriteFile(victim, []byte("edited since the scan"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, out := resolveAsAdmin(t, `{"all":true}`)
+	if n, _ := out["trashed"].(float64); n != 0 {
+		t.Errorf("trashed = %v, want 0 — an edited file must not be deleted", out["trashed"])
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("the edited file was deleted: %v", err)
+	}
+}
+
+// Cleanup must act only on server-side scan results: a client can neither name
+// a path the scan never produced nor smuggle in its own expected identity.
+func TestCleanupIgnoresCraftedRequest(t *testing.T) {
+	lib, _ := dupePairEnv(t)
+	outsider := filepath.Join(lib, "Album", "not-a-duplicate.jpg")
+	writeFile(t, outsider, []byte("unique content, never duplicated"))
+
+	// A path absent from the scan results.
+	_, out := resolveAsAdmin(t, `{"paths":["Album/not-a-duplicate.jpg"]}`)
+	if n, _ := out["trashed"].(float64); n != 0 {
+		t.Errorf("trashed = %v, want 0 for a path outside the scan results", out["trashed"])
+	}
+	if _, err := os.Stat(outsider); err != nil {
+		t.Errorf("a file absent from scan results was deleted: %v", err)
+	}
+
+	// Traversal outside the library.
+	_, out2 := resolveAsAdmin(t, `{"paths":["../escape.jpg","/etc/passwd"]}`)
+	if n, _ := out2["trashed"].(float64); n != 0 {
+		t.Errorf("trashed = %v, want 0 for traversal paths", out2["trashed"])
+	}
+
+	// A client-supplied identity must be ignored: DupFile's scan identity is
+	// json:"-", so these fields cannot be bound from the request body.
+	var probe DupFile
+	if err := json.Unmarshal([]byte(`{"path":"x","ident":"deadbeef","modNs":1}`), &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Ident != "" || probe.ModNs != 0 {
+		t.Errorf("scan identity is settable from JSON (ident=%q modNs=%d) — a client could forge it",
+			probe.Ident, probe.ModNs)
+	}
+}
+
+func TestCleanupAlwaysProtectsTheKeeper(t *testing.T) {
+	lib, g := dupePairEnv(t)
+	keep, _ := keeperAndExtra(t, g)
+
+	// Explicitly ask for the keeper by path.
+	body, _ := json.Marshal(map[string]any{"paths": []string{keep}})
+	_, out := resolveAsAdmin(t, string(body))
+	if n, _ := out["trashed"].(float64); n != 0 {
+		t.Errorf("trashed = %v, want 0 — the keeper must never be deleted", out["trashed"])
+	}
+	if _, err := os.Stat(filepath.Join(lib, filepath.FromSlash(keep))); err != nil {
+		t.Errorf("the keeper was deleted: %v", err)
 	}
 }

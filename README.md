@@ -48,6 +48,26 @@ tray icon and a native window (Windows).
 - **Persistent sessions** — HttpOnly cookies, ~30-day sliding expiry ("stay logged in").
 - **bcrypt**-hashed passwords and **login rate-limiting**.
 
+#### Duplicate finder API
+
+Scanning reads and hashes the whole library, so anything that starts work is
+admin-only and goes through the POST + same-origin (CSRF) middleware. Reading
+status is separate and never starts a scan:
+
+| Endpoint | Method | Who |
+|----------|--------|-----|
+| `/api/duplicates` | `GET` | any signed-in user — read-only status/results |
+| `/api/duplicates/scan` | `POST` `{rescan}` | admin — start or force a rescan |
+| `/api/duplicates/folder` | `POST` `{path, recursive}` | admin — scan one folder |
+| `/api/duplicates/cancel` | `POST` | admin — stop a running scan |
+| `/api/duplicates/resolve` | `POST` | admin — move duplicates to the recycle bin |
+
+Cleanup re-verifies each file against the scan (size, nanosecond mtime and a
+re-read content hash) immediately before trashing it, and refuses with
+`file changed since scan; rescan required` if anything differs — so a result
+that went stale can never delete a file that was edited or replaced in the
+meantime.
+
 ### Sharing & UX
 - **QR connect** — scan to open the gallery on a phone (uses the real published address).
 - **PWA install** on phones.
