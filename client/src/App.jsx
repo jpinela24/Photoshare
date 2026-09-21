@@ -2465,7 +2465,7 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.17.1'
+const APP_VERSION = '2.17.2'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -3195,7 +3195,7 @@ export default function App() {
         <div className="topbar-right">
           <span className="user-chip" title={me.role === 'admin' ? 'Administrator' : 'View-only'}>
             {me.role === 'admin' ? <UnlockIcon size={13} /> : <LockIcon size={13} />}
-            <span className="user-name">{me.username}</span>
+            <span className="user-chip-name">{me.username}</span>
           </span>
           <button className="adm-topbtn" onClick={handleLogout} title="Log out"><LogoutIcon size={14} /></button>
         </div>

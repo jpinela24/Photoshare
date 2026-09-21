@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.17.1** · Linux / Docker · Windows
+**Current version: v2.17.2** · Linux / Docker · Windows
 
 ---
 
@@ -207,6 +207,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.17.2** | **Roomier phone path row** — the sort control moved up to the first row beside the other view preferences (it was the only tool with a text label, so it dominated the path row), and the back/forward arrows took its place next to the address bar the way a browser arranges them. The address bar gains room and the row drops from four controls to three. Also fixes a regression from 2.17.1 where the mobile rule that hides the top-bar username was also hiding every name in **Settings → Users** |
 | **2.17.1** | **Mobile-friendly top bar** — on a phone the top bar's ~11 controls ran off the right edge, leaving the sort dropdown and account buttons unreachable. It now folds into **two compact rows** (identity + view controls, then path + tools), the QR button hides (you're already on the phone), the username collapses to its lock icon, and buttons grow to thumb-sized. The sidebar **slides over** the grid instead of squeezing it, and the Small/Medium/Large tile toggle is finally respected on phones — a blanket mobile rule had been overriding it. Desktop layout is unchanged |
 | **2.17.0** | **Duplicates in the folder you're browsing** — a new toolbar button checks **just the current folder** for duplicates, instead of making you scan the whole library and hunt for the relevant rows. Toggle **"Including subfolders"** to widen it. Runs in one request (it reuses the library scan's hash cache, so it's near-instant on an already-scanned library) and comes with the same keep-best recommendation, checkbox multi-select and one-click cleanup |
 | **2.16.1** | **Click the PhotoShare name to go home** — the app name in the top-left corner is now a button that jumps back to **All Photos** from anywhere (and closes an open search), the way a site logo usually behaves |
