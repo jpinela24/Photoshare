@@ -905,7 +905,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.18.0"
+const appVersion = "2.18.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2704,6 +2704,10 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var errs []string
+	// Report exactly which sources left their original folder so the client can
+	// drop those cards from the grid without a full reload. A path that failed,
+	// or that was already in the destination, is deliberately absent.
+	moved := []string{}
 	for _, rel := range body.Paths {
 		src, err := safePath(baseDir, rel)
 		if err != nil {
@@ -2720,15 +2724,23 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 		}
 		if err := os.Rename(src, dest); err != nil {
-			if err2 := copyFile(src, dest); err2 == nil {
-				os.Remove(src)
-			} else {
+			err2 := copyFile(src, dest)
+			if err2 != nil {
 				errs = append(errs, rel+": "+err2.Error())
+				continue
+			}
+			// The copy landed; the move is only complete once the source is
+			// gone. If it can't be removed the file is still in the old folder,
+			// so say so rather than letting the card vanish from the grid.
+			if err3 := os.Remove(src); err3 != nil {
+				errs = append(errs, rel+": copied but original remains: "+err3.Error())
+				continue
 			}
 		}
+		moved = append(moved, rel)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"errors": errs})
+	json.NewEncoder(w).Encode(map[string]any{"errors": errs, "moved": moved})
 }
 
 // POST /api/admin/batch/rename  {"paths":[...],"pattern":"Vacation_{n}","start":1,"padding":3}

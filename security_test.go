@@ -868,3 +868,76 @@ func TestFailedGuestAccessPersistenceRollsBack(t *testing.T) {
 		t.Error("guestAccess stayed enabled in memory after the write failed")
 	}
 }
+
+// ── Batch move reports exactly what left the folder ──────────────────────────
+
+// The grid drops a card as soon as the server says that file moved, so `moved`
+// has to be the truth: a path that failed, or that was already sitting in the
+// destination, must not appear in it. If it did, the card would vanish from the
+// UI while the file is still on disk in the original folder.
+func TestBatchMoveReportsOnlyFilesThatLeft(t *testing.T) {
+	withUsers(t, nil)
+	lib := t.TempDir()
+	prevBase := baseDir
+	baseDir = lib
+	rootMu.Lock()
+	rootCacheBase, rootCacheReal = "", ""
+	rootMu.Unlock()
+	t.Cleanup(func() {
+		baseDir = prevBase
+		rootMu.Lock()
+		rootCacheBase, rootCacheReal = "", ""
+		rootMu.Unlock()
+	})
+
+	if err := os.MkdirAll(filepath.Join(lib, "Album"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(lib, "Dest"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Album/a.jpg", "Album/b.jpg", "Dest/c.jpg"} {
+		if err := os.WriteFile(filepath.Join(lib, filepath.FromSlash(p)), []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Mix a real move, a file already at the destination, and a bogus path.
+	body := `{"paths":["Album/a.jpg","Dest/c.jpg","Album/missing.jpg"],"destFolder":"Dest"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/batch/move", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionFor(t, "admin"))
+	rec := httptest.NewRecorder()
+	adminBatchMoveHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got struct {
+		Errors []string `json:"errors"`
+		Moved  []string `json:"moved"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(got.Moved) != 1 || got.Moved[0] != "Album/a.jpg" {
+		t.Errorf("moved = %v, want exactly [Album/a.jpg]", got.Moved)
+	}
+	if len(got.Errors) != 1 {
+		t.Errorf("errors = %v, want one entry for the missing file", got.Errors)
+	}
+
+	// Every path the client would keep on screen must still be where it was.
+	for _, p := range []string{"Album/b.jpg", "Dest/c.jpg"} {
+		if _, err := os.Stat(filepath.Join(lib, filepath.FromSlash(p))); err != nil {
+			t.Errorf("%s should still exist: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(lib, "Dest", "a.jpg")); err != nil {
+		t.Errorf("Album/a.jpg was reported moved but is not in Dest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(lib, "Album", "a.jpg")); !os.IsNotExist(err) {
+		t.Error("Album/a.jpg was reported moved but the original is still there")
+	}
+}

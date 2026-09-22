@@ -145,7 +145,15 @@ async function batchMoveDrop(files, destFolder, token, onFileMoved) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ paths, destFolder }),
   })
-  if (r.ok) paths.forEach(p => onFileMoved?.(p))
+  if (!r.ok) return
+  // Prefer the server's list of what actually moved; a 200 only means the batch
+  // ran, not that every file in it left its folder.
+  let moved = paths
+  try {
+    const data = await r.json()
+    if (Array.isArray(data.moved)) moved = data.moved
+  } catch {}
+  moved.forEach(p => onFileMoved?.(p))
 }
 
 // Cookie-based now — the session cookie is sent automatically on same-origin
@@ -867,7 +875,9 @@ function UploadInboxItem({ folderName, currentPath, onNavigate, onFileMoved, onU
   )
 }
 
-function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSettings, uploadFolderName, onUpload }) {
+// `reloadKey` lets the app tell the sidebar that files moved between folders, so
+// the per-folder photo counts re-fetch instead of sitting stale until a refresh.
+function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSettings, uploadFolderName, onUpload, reloadKey = 0 }) {
   const { token } = useContext(AdminCtx)
   const [roots, setRoots]       = useState([])
   const [rootInfo, setRootInfo] = useState(null)
@@ -910,6 +920,9 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
   }
 
   const refresh = () => setRefreshKey(k => k + 1)
+  // Either source of change remounts the tree; SidebarItem fetches its own
+  // counts on mount, so a new key is what makes them refresh.
+  const treeKey = `${refreshKey}:${reloadKey}`
 
   useEffect(() => {
     fetch('/api/browse?path=')
@@ -920,7 +933,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
       .then(r => r.json())
       .then(setRootInfo)
       .catch(() => {})
-  }, [refreshKey])
+  }, [treeKey])
 
   useEffect(() => { if (creatingRoot) rootInputRef.current?.focus() }, [creatingRoot])
 
@@ -1023,7 +1036,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         <nav className="sidebar-nav">
           {roots.map(r => (
             <SidebarItem
-              key={r.path + refreshKey}
+              key={r.path + treeKey}
               entry={r}
               currentPath={currentPath}
               onNavigate={onNavigate}
@@ -2503,7 +2516,7 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.18.0'
+const APP_VERSION = '2.18.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2667,6 +2680,14 @@ export default function App() {
   const [history, setHistory]         = useState([''])
   const [histIdx, setHistIdx]         = useState(0)
   const [entries, setEntries]         = useState([])
+  // Bumped to force a re-fetch of the current folder. `setPath(p => p)` can't
+  // do this: React bails out when the next state is identical, so the browse
+  // effect never re-runs and the grid keeps showing stale contents.
+  const [reloadKey, setReloadKey]     = useState(0)
+  // Separate from reloadKey: the sidebar's folder counts go stale whenever files
+  // move or are deleted, even when the grid was patched in place and needs no
+  // re-fetch of its own.
+  const [treeVersion, setTreeVersion] = useState(0)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(null)
   const [selected, setSelected]       = useState(null)
@@ -2852,7 +2873,10 @@ export default function App() {
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
       .then(data => { setEntries(data || []); setLoading(false) })
       .catch(err => { setError(err.message); setLoading(false) })
-  }, [path, me?.authenticated])
+  }, [path, me?.authenticated, reloadKey])
+
+  const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
+  const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
 
   const navigate = useCallback((newPath) => {
     setPath(newPath)
@@ -2891,7 +2915,25 @@ export default function App() {
     })
     const data = await r.json()
     const errCount = data.errors?.length || 0
-    if (action === 'delete') setEntries(prev => prev.filter(e => !selItems.has(e.path)))
+    // Reflect the result in the grid right away instead of waiting for the user
+    // to refresh. Delete and move both take files out of the current folder;
+    // copy only changes it when the destination *is* the current folder.
+    if (action === 'delete') {
+      setEntries(prev => prev.filter(e => !selItems.has(e.path)))
+    } else if (action === 'move') {
+      // Trust the server's list of what actually left — a file that errored, or
+      // that was already in the destination, must stay on screen. Older servers
+      // don't send `moved`; fall back to a re-fetch rather than guessing.
+      if (Array.isArray(data.moved)) {
+        const gone = new Set(data.moved)
+        setEntries(prev => prev.filter(e => !gone.has(e.path)))
+      } else {
+        reload()
+      }
+    } else if (action === 'copy' && (destFolder ?? '') === path) {
+      reload()
+    }
+    bumpTree() // folder counts in the sidebar changed
     clearSelect()
     setBatchStatus(errCount === 0
       ? `✓ ${paths.length} item${paths.length !== 1 ? 's' : ''} ${action === 'delete' ? 'moved to trash' : action === 'copy' ? 'copied' : 'moved'}`
@@ -2916,7 +2958,8 @@ export default function App() {
     const skippedMsg = d.skipped?.length ? ` · ${d.skipped.length} skipped (not a photo/video)` : ''
     setUploadStatus(`✓ ${d.uploaded} file${d.uploaded !== 1 ? 's' : ''} uploaded${skippedMsg}`)
     setTimeout(() => setUploadStatus(null), 3000)
-    if (path === uploadFolderName) setPath(p => p) // refresh if already in inbox
+    if (path === uploadFolderName) reload() // show the new files if we're in the inbox
+    else bumpTree() // otherwise just correct the inbox count in the sidebar
   }
 
   const handleUploadDrop = (files) => {
@@ -2981,7 +3024,8 @@ export default function App() {
   const handleFileMoved = useCallback((filePath) => {
     setEntries(prev => prev.filter(e => e.path !== filePath))
     setSelItems(prev => { const n = new Set(prev); n.delete(filePath); return n })
-  }, [])
+    bumpTree()
+  }, [bumpTree])
 
   const handleLogout = async () => {
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {})
@@ -3248,7 +3292,7 @@ export default function App() {
 
         {/* Sidebar */}
         <div className={`sidebar-wrap ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
-          <Sidebar currentPath={path} onNavigate={p => { navigate(p); setSidebarOpen(false) }} onFileMoved={handleFileMoved} onShowStats={() => { setShowStats(true); setSidebarOpen(false) }} onShowSettings={() => { setShowSettings(true); setSidebarOpen(false) }} uploadFolderName={uploadFolderName} onUpload={handleUploadDrop} />
+          <Sidebar currentPath={path} onNavigate={p => { navigate(p); setSidebarOpen(false) }} onFileMoved={handleFileMoved} reloadKey={treeVersion} onShowStats={() => { setShowStats(true); setSidebarOpen(false) }} onShowSettings={() => { setShowSettings(true); setSidebarOpen(false) }} uploadFolderName={uploadFolderName} onUpload={handleUploadDrop} />
         </div>
 
         {/* Main content */}
@@ -3534,7 +3578,7 @@ export default function App() {
             clearSelect()
             setBatchStatus(errs === 0 ? '✓ Files renamed' : `Done with ${errs} error(s)`)
             setTimeout(() => setBatchStatus(null), 3000)
-            setPath(p => p) // trigger refresh
+            reload() // renamed files need fresh paths
           }}
         />
       )}
