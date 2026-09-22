@@ -574,11 +574,46 @@ func sessionFor(t *testing.T, role string) *http.Cookie {
 	return &http.Cookie{Name: sessionCookie, Value: tok}
 }
 
+// waitForDupeScan blocks until no duplicate scan is running.
+//
+// dupesScanHandler starts the scan in a goroutine and returns immediately, so a
+// test that POSTs to it outlives nothing — the scan keeps running into whatever
+// test comes next and races it over the package globals it reads (dataDir, via
+// the hash cache it writes on completion). Registered with t.Cleanup, this
+// makes a test own the work it kicked off.
+func waitForDupeScan(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		dupes.mu.Lock()
+		running := dupes.running
+		dupes.mu.Unlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("duplicate scan did not finish within 10s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestDuplicateWorkEndpointsRequireAdmin(t *testing.T) {
 	withUsers(t, nil)
 	prevGuest := guestAccess
 	guestAccess = true
 	t.Cleanup(func() { guestAccess = prevGuest })
+
+	// This test POSTs to the scan endpoint, which starts the scan in a
+	// goroutine. Point dataDir somewhere disposable first — dupCachePath() is
+	// relative to it, so the default writes dupe-cache.gob into the repo root
+	// and leaves it there as an untracked file after every run.
+	prevData := dataDir
+	dataDir = t.TempDir()
+	// Wait for the scan before restoring dataDir: it must not outlive this
+	// test (it would race the next test's setup) and it must not still be
+	// running when dataDir points back at the working tree.
+	t.Cleanup(func() { waitForDupeScan(t); dataDir = prevData })
 
 	admin := sessionFor(t, "admin")
 	viewer := sessionFor(t, "viewer")

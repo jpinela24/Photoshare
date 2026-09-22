@@ -160,3 +160,30 @@ func TestSweepCacheKeepsLiveEntriesAndRemovesOrphans(t *testing.T) {
 		t.Errorf("sweep deleted a non-cache file: %v", err)
 	}
 }
+
+// A cache inside the library gets walked as if it were content, so the startup
+// check has to recognise every way THUMB_DIR can land there — and must not
+// misfire on a sibling directory, which is the recommended layout.
+func TestDirWithin(t *testing.T) {
+	lib := filepath.Join("/srv", "photos")
+	cases := []struct {
+		name  string
+		child string
+		want  bool
+	}{
+		{"the library itself", lib, true},
+		{"directly inside", filepath.Join(lib, "cache"), true},
+		{"nested inside", filepath.Join(lib, "a", "b", "cache"), true},
+		{"sibling", filepath.Join("/srv", "photoshare-cache"), false},
+		{"parent", "/srv", false},
+		{"unrelated", filepath.Join("/var", "cache"), false},
+		// A sibling whose name merely starts with the library's name must not
+		// be mistaken for a child.
+		{"name-prefix sibling", "/srv/photos-cache", false},
+	}
+	for _, c := range cases {
+		if got := dirWithin(lib, c.child); got != c.want {
+			t.Errorf("%s: dirWithin(%q, %q) = %v, want %v", c.name, lib, c.child, got, c.want)
+		}
+	}
+}

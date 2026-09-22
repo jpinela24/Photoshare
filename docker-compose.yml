@@ -10,6 +10,11 @@ services:
     environment:
       PHOTO_DIR: /photos        # library path inside the container (mounted below)
       DATA_DIR: /config         # where config/log/cert persist
+      # Thumbnail / transcode cache. Kept off /config on purpose: config is
+      # small and worth backing up, while this is large (H.264 transcodes are
+      # full video re-encodes) and entirely regenerable. Point it at the same
+      # roomy drive as the library — but its own directory, never inside it.
+      THUMB_DIR: /cache
       PORT: "8080"
       HTTP_ONLY: "true"         # plain HTTP (nginx reverse proxy in front for TLS)
       # First-run admin account (ignored once accounts exist — change in Settings).
@@ -34,6 +39,9 @@ services:
       # a re-clone into a new folder it silently pointed at an empty config,
       # resetting the admin account back to defaults. Pin it here instead.
       - /home/jpinela/Photoshare/photoshare-config:/config
+      # Cache on the 1.8T drive, alongside MEMORIES rather than inside it.
+      # Safe to delete when the container is down; it rebuilds on next start.
+      - /mnt/data/photoshare-cache:/cache
 
   # ── AI: CLIP embedding sidecar (local semantic search) ──────────────────────
   # Python + CLIP on CPU. First build downloads the model (~600 MB) and the

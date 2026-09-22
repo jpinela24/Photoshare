@@ -905,7 +905,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.19.0"
+const appVersion = "2.19.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2431,6 +2431,15 @@ func invalidateCacheTree(dir string) {
 	})
 }
 
+// dirWithin reports whether child is parent itself or sits underneath it.
+func dirWithin(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // sweepCache deletes entries in thumbDir that no live file claims. `live` holds
 // the stems still reachable; anything else is a leftover from a file that was
 // moved, replaced or deleted. Returns how many entries it reclaimed.
@@ -3706,6 +3715,9 @@ func pregenThumbs() {
 		if err != nil { return nil }
 		if info.IsDir() {
 			if strings.HasPrefix(info.Name(), ".") { return filepath.SkipDir }
+			// Never walk into the cache itself — a cache configured inside the
+			// library would otherwise have thumbnails generated of thumbnails.
+			if path == thumbDir { return filepath.SkipDir }
 			lower := strings.ToLower(info.Name())
 			if lower == trashLow || lower == strings.ToLower(uploadDir) || hiddenFolderNames[lower] { return filepath.SkipDir }
 			return nil
@@ -4101,15 +4113,39 @@ func main() {
 		log.Printf("No photo library configured yet — open the app to finish setup")
 	}
 
-	// The derivative cache lives in DATA_DIR, not the OS temp dir. In Docker
+	// The derivative cache defaults to DATA_DIR, not the OS temp dir. In Docker
 	// /tmp is inside the container, so every `up --build` threw the whole cache
 	// away and re-generated thumbnails for the entire library; DATA_DIR is a
 	// mounted volume and survives. It also stops the OS reaping the cache from
 	// under a long-running desktop install.
-	thumbDir = filepath.Join(dataDir, "thumbs")
+	//
+	// THUMB_DIR overrides it. Config is small and worth backing up; the cache
+	// is large — H.264 transcodes are full video re-encodes — and entirely
+	// disposable, so on a machine where the config volume is a small disk it
+	// belongs somewhere roomier. Point it at its own directory, not inside the
+	// photo library: everything here is regenerable and should never be
+	// mistaken for, or synced as, part of the library.
+	thumbDir = envOr("THUMB_DIR", filepath.Join(dataDir, "thumbs"))
 	if err := os.MkdirAll(thumbDir, 0755); err != nil {
 		log.Fatal("cannot create thumb cache dir:", err)
 	}
+	// A cache inside the library gets walked as if it were content: the browser
+	// lists it, the duplicate finder matches every thumbnail against its own
+	// source, and pre-generation builds thumbnails of thumbnails. The walkers
+	// skip thumbDir (see pregenThumbs), but it is still the wrong place for it.
+	//
+	// Refuse only when THUMB_DIR was set explicitly — the operator is choosing
+	// a location right now and should be told immediately. If the default
+	// landed there because DATA_DIR itself is inside the library, warn instead:
+	// that install was working before this release and shouldn't stop booting
+	// over a cache path.
+	if baseDir != "" && dirWithin(baseDir, thumbDir) {
+		if os.Getenv("THUMB_DIR") != "" {
+			log.Fatalf("THUMB_DIR (%s) is inside the photo library (%s) — point it at a directory outside the library", thumbDir, baseDir)
+		}
+		log.Printf("WARNING: the thumbnail cache (%s) sits inside the photo library (%s). Set THUMB_DIR to a directory outside it.", thumbDir, baseDir)
+	}
+	log.Printf("Thumbnail cache: %s", thumbDir)
 	// One-time tidy-up: entries in the old temp location are unreachable now
 	// (different directory, and the key scheme changed), so drop them rather
 	// than leaving a stale cache of a large library sitting in temp.
