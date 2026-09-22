@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.18.1** · Linux / Docker · Windows
+**Current version: v2.19.0** · Linux / Docker · Windows
 
 ---
 
@@ -103,7 +103,7 @@ initial `ADMIN_PASSWORD`. Config persists in `./photoshare-config` (`/config`).
 | Env var | Purpose | Default |
 |---------|---------|---------|
 | `PHOTO_DIR` | Library path inside the container | `/photos` |
-| `DATA_DIR` | Where config/cert persist | `/config` |
+| `DATA_DIR` | Where config/cert and the thumbnail cache persist | `/config` |
 | `PORT` | Listen port inside the container | `8080` |
 | `HTTP_ONLY` | Plain HTTP (put a reverse proxy in front for TLS) | `true` |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | First-run admin account (ignored once accounts exist). If `ADMIN_PASSWORD` is unset, a random one is generated and printed once to the logs | `admin` / random |
@@ -227,6 +227,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.19.0** | **Thumbnail cache survives deploys, and stops going stale** — the cache moved from the OS temp directory into `DATA_DIR`. On Docker it lived in `/tmp` *inside* the container, so every `docker compose up -d --build` threw away the whole cache and re-generated thumbnails for the entire library. Cache entries are now keyed on each file's size and modification time as well as its path: editing or replacing a photo in place used to keep serving the thumbnail built from the **old** contents forever, with no way to refresh it short of "Rebuild Thumbnails". Moving, renaming or trashing a file now discards its cached thumbnail instead of leaking it, and a sweep at startup reclaims entries orphaned by changes made outside the app (a network share, a sync client). **One-time rebuild:** the first start after upgrading regenerates every thumbnail, because both the location and the key scheme changed — expect the library to fill in gradually while pre-generation runs. This happens once; after that the cache persists across restarts and container rebuilds |
 | **2.18.1** | **Moving files updates the grid immediately** — moving a selection used to leave every card on screen until you refreshed, even though the files were already gone from the folder. The server now reports exactly which files left, so the grid drops those cards and the sidebar folder counts re-fetch straight away; a file that failed to move, or that was already in the destination, correctly stays put. Also fixes batch **rename** and inbox uploads never refreshing the view at all, and a partial move that copied a file but could not delete the original now reports the failure instead of claiming success |
 | **2.18.0** | **Security audit fixes** — duplicate cleanup now re-verifies every file against the scan (size, nanosecond mtime and a re-read content hash) immediately before trashing it, so a stale result can no longer delete a file that was edited or replaced since the scan. Concurrent uploads of the same filename can no longer overwrite each other — destination names are claimed atomically instead of checked-then-renamed. Config saves are **transactional**, so a settings save racing a user change can no longer drop accounts, and a failed write rolls back rather than leaving the server disagreeing with disk. Starting, cancelling and folder-scoped duplicate scans are now **admin-only POSTs** (reading status stays a GET and never starts work). Frontend build dependencies upgraded to clear **6 advisories (4 high) → 0**; Docker/CI move to Node 22 |
 | **2.17.3** | **Prev/next arrows while watching a video** — the viewer's ‹ › arrows were suppressed for videos, so a video was a dead end: you had to close the lightbox and pick the next item by hand. They now show for video exactly as for photos (the player already reserves side gutters for them, so they sit clear of the native video controls) |

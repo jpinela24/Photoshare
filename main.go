@@ -905,7 +905,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.18.1"
+const appVersion = "2.19.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1441,8 +1441,7 @@ func trashThumbHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	hash := fmt.Sprintf("%x", md5.Sum([]byte(full+"_trash")))
-	thumbPath := filepath.Join(thumbDir, hash+".jpg")
+	thumbPath := cachePathFor(full, variantTrash)
 
 	if _, err := os.Stat(thumbPath); err == nil {
 		http.ServeFile(w, r, thumbPath)
@@ -2360,6 +2359,106 @@ func transcodeToCache(src, cachePath string) error {
 	return os.Rename(tmp, cachePath)
 }
 
+// ── Derivative cache (thumbnails, HEIC display JPEGs, H.264 transcodes) ──────
+//
+// Every cached derivative lives in thumbDir under a hash of its source file.
+// The hash covers the file's size and mtime as well as its path: keying on the
+// path alone meant that editing a file in place kept serving the derivative
+// built from the *old* contents forever, because nothing ever noticed the
+// source had changed.
+//
+// The trade-off is that a file which moves or changes leaves its previous
+// entries behind with nothing pointing at them. invalidateCache drops them at
+// the moment we know a file is about to move, and sweepCache reclaims whatever
+// slips through (external edits, crashes) on the next pre-generation pass.
+
+const (
+	variantThumb   = ""         // grid thumbnail                      .jpg
+	variantTrash   = "_trash"   // thumbnail for a file in the trash   .jpg
+	variantDisplay = "_display" // HEIC converted for display          .jpg
+	variantH264    = "_h264"    // HEVC transcoded for playback        .mp4
+)
+
+// cacheVariants is every variant a single source file can produce — the set
+// invalidateCache clears and sweepCache treats as live.
+var cacheVariants = []string{variantThumb, variantTrash, variantDisplay, variantH264}
+
+// cacheStem returns the cache filename (no extension) for one variant of one
+// source file. A file whose size and mtime are unchanged keeps its cached
+// derivatives; any change yields a different stem, so the stale entry is simply
+// never looked up again.
+//
+// If the file can't be stat'd we fall back to a path-only key. That only
+// happens when the source is missing, in which case there is nothing to
+// generate from anyway.
+func cacheStem(full, variant string) string {
+	key := full + "\x00" + variant
+	if fi, err := os.Lstat(full); err == nil {
+		key += fmt.Sprintf("\x00%d\x00%d", fi.Size(), fi.ModTime().UnixNano())
+	}
+	return fmt.Sprintf("%x", md5.Sum([]byte(key)))
+}
+
+// cachePathFor is cacheStem plus the extension the variant is stored with.
+func cachePathFor(full, variant string) string {
+	ext := ".jpg"
+	if variant == variantH264 {
+		ext = ".mp4"
+	}
+	return filepath.Join(thumbDir, cacheStem(full, variant)+ext)
+}
+
+// invalidateCache removes every cached derivative of a file.
+//
+// Call it *before* moving, renaming or trashing the file, while it is still at
+// `full`: the key is derived from the file itself, so once it has moved the old
+// entries can no longer be addressed and would linger until the next sweep.
+func invalidateCache(full string) {
+	for _, v := range cacheVariants {
+		os.Remove(cachePathFor(full, v))
+	}
+}
+
+// invalidateCacheTree does the same for every file under a directory, for the
+// cases where a whole folder is renamed or moved at once.
+func invalidateCacheTree(dir string) {
+	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		invalidateCache(p)
+		return nil
+	})
+}
+
+// sweepCache deletes entries in thumbDir that no live file claims. `live` holds
+// the stems still reachable; anything else is a leftover from a file that was
+// moved, replaced or deleted. Returns how many entries it reclaimed.
+func sweepCache(live map[string]struct{}) int {
+	entries, err := os.ReadDir(thumbDir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ext := filepath.Ext(name)
+		if ext != ".jpg" && ext != ".mp4" {
+			continue // not ours; leave it alone
+		}
+		if _, ok := live[strings.TrimSuffix(name, ext)]; ok {
+			continue
+		}
+		if os.Remove(filepath.Join(thumbDir, name)) == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
 func thumbHandler(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("path")
 	full, err := safePath(baseDir, rel)
@@ -2368,8 +2467,7 @@ func thumbHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash := fmt.Sprintf("%x", md5.Sum([]byte(full)))
-	thumbPath := filepath.Join(thumbDir, hash+".jpg")
+	thumbPath := cachePathFor(full, variantThumb)
 
 	// Serve from cache if available
 	if _, err := os.Stat(thumbPath); err == nil {
@@ -2453,8 +2551,7 @@ func photoHandler(w http.ResponseWriter, r *http.Request) {
 
 	// HEIC: browsers can't display it — serve a converted JPEG instead
 	if isHeic(filepath.Base(full)) {
-		hash := fmt.Sprintf("%x", md5.Sum([]byte(full+"_display")))
-		convPath := filepath.Join(thumbDir, hash+".jpg")
+		convPath := cachePathFor(full, variantDisplay)
 
 		if _, err := os.Stat(convPath); os.IsNotExist(err) {
 			if err := heicToJPEG(full, convPath); err != nil {
@@ -2471,8 +2568,7 @@ func photoHandler(w http.ResponseWriter, r *http.Request) {
 		// HEVC/H.265 (iPhone .MOV/.mp4): browsers can't decode it. Transcode to
 		// H.264 once, cache it, then serve the cached MP4.
 		if codec := videoCodec(full); codec == "hevc" || codec == "h265" {
-			hash := fmt.Sprintf("%x", md5.Sum([]byte(full+"_h264")))
-			convPath := filepath.Join(thumbDir, hash+".mp4")
+			convPath := cachePathFor(full, variantH264)
 
 			if _, err := os.Stat(convPath); os.IsNotExist(err) {
 				if err := transcodeToCache(full, convPath); err != nil {
@@ -2574,6 +2670,7 @@ func adminRenameFolderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a folder with that name already exists", http.StatusConflict)
 		return
 	}
+	invalidateCacheTree(full)
 	if err := os.Rename(full, newFull); err != nil {
 		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -2723,6 +2820,7 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 			base := strings.TrimSuffix(filepath.Base(dest), ext)
 			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 		}
+		invalidateCache(src) // key covers the source path — clear before it moves
 		if err := os.Rename(src, dest); err != nil {
 			err2 := copyFile(src, dest)
 			if err2 != nil {
@@ -2792,6 +2890,7 @@ func adminBatchRenameHandler(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, rel+": target name already exists")
 			continue
 		}
+		invalidateCache(full)
 		if err := os.Rename(full, newFull); err != nil {
 			errs = append(errs, rel+": "+err.Error())
 		}
@@ -2931,6 +3030,7 @@ func adminMoveFileHandler(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(filepath.Base(destFull), ext)
 		destFull = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 	}
+	invalidateCache(srcFull)
 	// Fast rename (same drive)
 	if err := os.Rename(srcFull, destFull); err != nil {
 		// Cross-drive fallback: copy then delete
@@ -3500,6 +3600,7 @@ func moveToTrash(src, originalRel string) error {
 		dest = filepath.Join(trashDir, fmt.Sprintf("%s_%d_%s", timestamp, time.Now().UnixNano(), base))
 	}
 
+	invalidateCache(src)
 	// Fast path: rename (same drive)
 	if err := os.Rename(src, dest); err == nil {
 		writeTrashInfo(dest, originalRel)
@@ -3615,6 +3716,34 @@ func pregenThumbs() {
 		return nil
 	})
 
+	// Reclaim entries nothing points at any more. invalidateCache handles the
+	// moves and deletes that go through the app; this catches the rest —
+	// files changed on disk behind our back (an SMB share, a sync client), or
+	// a move that was interrupted before it could invalidate.
+	//
+	// The trash has its own thumbnails and is skipped by the walk above, so
+	// include it explicitly or every sweep would delete the trash view's
+	// thumbnails and they would be rebuilt on the next visit.
+	live := make(map[string]struct{}, len(files)*len(cacheVariants))
+	addLive := func(p string) {
+		for _, v := range cacheVariants {
+			live[cacheStem(p, v)] = struct{}{}
+		}
+	}
+	for _, p := range files {
+		addLive(p)
+	}
+	filepath.Walk(trashDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		addLive(p)
+		return nil
+	})
+	if n := sweepCache(live); n > 0 {
+		log.Printf("[THUMBS] swept %d orphaned cache entries", n)
+	}
+
 	pregen.mu.Lock()
 	pregen.running = true
 	pregen.total = len(files)
@@ -3633,8 +3762,7 @@ func pregenThumbs() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			hash := fmt.Sprintf("%x", md5.Sum([]byte(p)))
-			thumbPath := filepath.Join(thumbDir, hash+".jpg")
+			thumbPath := cachePathFor(p, variantThumb)
 
 			// Skip if already cached
 			if _, err := os.Stat(thumbPath); err == nil {
@@ -3750,13 +3878,14 @@ func adminRotateHandler(w http.ResponseWriter, r *http.Request) {
 	case 270:
 		img = imaging.Rotate270(img)
 	}
+	// Drop the cached derivatives *before* overwriting the file: the cache key
+	// covers size and mtime, so once the rotated image is on disk the old
+	// entries can no longer be addressed and would linger until the next sweep.
+	invalidateCache(full)
 	if err := imaging.Save(img, full); err != nil {
 		http.Error(w, "cannot save: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Clear thumbnail cache for this file
-	hash := fmt.Sprintf("%x", md5.Sum([]byte(full)))
-	os.Remove(filepath.Join(thumbDir, hash+".jpg"))
 	log.Printf("[ROTATE] %s by %d°", full, angle)
 	w.WriteHeader(http.StatusOK)
 }
@@ -3972,9 +4101,23 @@ func main() {
 		log.Printf("No photo library configured yet — open the app to finish setup")
 	}
 
-	thumbDir = filepath.Join(os.TempDir(), "photo-share-thumbs")
+	// The derivative cache lives in DATA_DIR, not the OS temp dir. In Docker
+	// /tmp is inside the container, so every `up --build` threw the whole cache
+	// away and re-generated thumbnails for the entire library; DATA_DIR is a
+	// mounted volume and survives. It also stops the OS reaping the cache from
+	// under a long-running desktop install.
+	thumbDir = filepath.Join(dataDir, "thumbs")
 	if err := os.MkdirAll(thumbDir, 0755); err != nil {
 		log.Fatal("cannot create thumb cache dir:", err)
+	}
+	// One-time tidy-up: entries in the old temp location are unreachable now
+	// (different directory, and the key scheme changed), so drop them rather
+	// than leaving a stale cache of a large library sitting in temp.
+	if old := filepath.Join(os.TempDir(), "photo-share-thumbs"); old != thumbDir {
+		if _, err := os.Stat(old); err == nil {
+			os.RemoveAll(old)
+			log.Printf("[THUMBS] removed the old temp-dir cache at %s", old)
+		}
 	}
 
 	log.Printf("Open http://localhost:%s in your browser", port)
