@@ -905,7 +905,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.19.1"
+const appVersion = "2.20.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1781,6 +1781,93 @@ func inboxUploadHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"uploaded": uploaded, "skipped": skipped})
 }
 
+// ── Web Share Target (Android) ───────────────────────────────────────────────
+//
+// With PhotoShare installed to the home screen, Android offers it in the system
+// share sheet, so sending photos from the camera roll is two taps instead of
+// finding the upload page. The OS posts the files here as a top-level
+// navigation; we save them to the inbox and redirect into the app.
+//
+// iOS does not implement the Web Share Target API at all, so this does nothing
+// on iPhone — there the upload page (or drag-and-drop on a laptop) is still the
+// way in. Desktop browsers likewise ignore it.
+
+// shareOriginOK is the CSRF check for the share target.
+//
+// The normal mutate() check can't be used: this POST is performed by the OS
+// share sheet, not by a fetch from our own page, so the Origin header isn't
+// ours to control — Chromium may send the app's origin, omit it, or send the
+// opaque "null". Rejecting those would reject every real share.
+//
+// A genuine cross-site POST is still refused, and the protection that actually
+// matters here is the session cookie: it is SameSite=Lax, so a malicious page's
+// cross-site POST carries no session and this handler saves nothing.
+func shareOriginOK(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return true // OS-initiated, or an opaque origin — not a cross-site page
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return true // unparseable/opaque; the session cookie is the real gate
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+// POST /share-target — receives files from the Android share sheet.
+func shareTargetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !shareOriginOK(r) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	// No session → save nothing and send them to the app to sign in. The files
+	// are lost, but silently discarding them with a success page would be
+	// worse: they would think the photos were backed up.
+	if _, ok := sessionFromRequest(r); !ok {
+		http.Redirect(w, r, "/?shared=signin", http.StatusSeeOther)
+		return
+	}
+
+	destDir := filepath.Join(baseDir, uploadDir)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(512 << 20); err != nil {
+		http.Redirect(w, r, "/?shared=error", http.StatusSeeOther)
+		return
+	}
+	uploaded, skipped := 0, 0
+	for _, fh := range r.MultipartForm.File["files"] {
+		name := filepath.Base(fh.Filename)
+		// Same gate as the inbox upload: extension *and* magic bytes, so the
+		// share sheet can't be used to drop arbitrary files into the library.
+		if !isImage(name) && !isVideo(name) {
+			skipped++
+			continue
+		}
+		if !hasMediaMagic(fh) {
+			skipped++
+			continue
+		}
+		if _, err := saveUploadedFile(fh, destDir); err != nil {
+			skipped++
+			log.Printf("[SHARE] failed %s: %v", fh.Filename, err)
+			continue
+		}
+		uploaded++
+	}
+	if uploaded > 0 {
+		notify("PhotoShare", fmt.Sprintf("%d file%s shared to the inbox", uploaded, plural(uploaded)))
+		log.Printf("[SHARE] %d file(s) to the inbox, %d skipped", uploaded, skipped)
+	}
+	// 303 so the browser follows with a GET — a refresh of the landing page
+	// must not re-submit the upload.
+	http.Redirect(w, r, fmt.Sprintf("/?shared=%d&skipped=%d", uploaded, skipped), http.StatusSeeOther)
+}
+
 // plural returns "s" for counts other than 1 (for simple message building).
 func plural(n int) string {
 	if n == 1 {
@@ -1850,6 +1937,20 @@ func manifestHandler(w http.ResponseWriter, r *http.Request) {
 		"icons": []map[string]string{
 			{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
 			{"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+		},
+		// Puts PhotoShare in the Android system share sheet once the app is
+		// installed to the home screen. Ignored by browsers that don't
+		// implement the Web Share Target API, which includes all of iOS.
+		"share_target": map[string]any{
+			"action":  "/share-target",
+			"method":  "POST",
+			"enctype": "multipart/form-data",
+			"params": map[string]any{
+				"files": []map[string]any{{
+					"name":   "files",
+					"accept": []string{"image/*", "video/*"},
+				}},
+			},
 		},
 	})
 }
@@ -3511,6 +3612,11 @@ func buildDateIndex() {
 		idx = append(idx, datedFile{Path: filepath.ToSlash(rel), Taken: when, IsVideo: isVideo(name), Lat: lat, Lng: lng, Geo: geo})
 		return nil
 	})
+	// Newest first. /api/timeline pages straight out of this, and the two other
+	// readers (on-this-day, geo) group or filter and don't depend on order, so
+	// sorting once here keeps the timeline free rather than re-sorting 15k+
+	// entries on every request.
+	sort.Slice(idx, func(i, j int) bool { return idx[i].Taken.After(idx[j].Taken) })
 	dateIndexMu.Lock()
 	dateIndex = idx
 	dateIndexBuilt = true
@@ -3573,6 +3679,95 @@ func onThisDayHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"built": built, "groups": groups})
+}
+
+// GET /api/timeline?offset=0&limit=200 — the whole library newest-first by
+// capture date, paged.
+//
+// Folder browsing answers "where did I put it"; this answers "roughly when",
+// which is how people actually look for a photo once a library is large enough
+// that no one remembers the folder. It reads the same date index that powers
+// On This Day, so it costs nothing extra to maintain.
+//
+// The first page also carries month buckets, each with the offset where that
+// month starts. That is what makes "jump to March 2019" a single paged fetch
+// instead of walking the whole list.
+func timelineHandler(w http.ResponseWriter, r *http.Request) {
+	dateIndexMu.RLock()
+	built := dateIndexBuilt
+	idx := dateIndex
+	dateIndexMu.RUnlock()
+
+	offset := clampAtoi(r.URL.Query().Get("offset"), 0, 0, len(idx))
+	limit := clampAtoi(r.URL.Query().Get("limit"), 200, 1, 500)
+
+	type item struct {
+		Path    string `json:"path"`
+		Name    string `json:"name"`
+		IsVideo bool   `json:"isVideo"`
+		Taken   int64  `json:"taken"` // unix seconds; the client formats it
+	}
+	items := []item{}
+	for i := offset; i < offset+limit && i < len(idx); i++ {
+		f := idx[i]
+		items = append(items, item{
+			Path:    f.Path,
+			Name:    filepath.Base(f.Path),
+			IsVideo: f.IsVideo,
+			Taken:   f.Taken.Unix(),
+		})
+	}
+
+	resp := map[string]any{
+		"built": built,
+		"total": len(idx),
+		"items": items,
+	}
+	// Buckets only on the first page — they describe the whole list and don't
+	// change as the client pages through it.
+	if offset == 0 {
+		type bucket struct {
+			Key    string `json:"key"`   // 2024-07, for jumping
+			Label  string `json:"label"` // July 2024
+			Count  int    `json:"count"`
+			Offset int    `json:"offset"`
+		}
+		buckets := []bucket{}
+		for i, f := range idx {
+			key := f.Taken.Format("2006-01")
+			if n := len(buckets); n > 0 && buckets[n-1].Key == key {
+				buckets[n-1].Count++
+				continue
+			}
+			buckets = append(buckets, bucket{
+				Key:    key,
+				Label:  f.Taken.Format("January 2006"),
+				Count:  1,
+				Offset: i,
+			})
+		}
+		resp["buckets"] = buckets
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// clampAtoi parses a query-string integer, falling back to def and clamping to
+// [lo, hi] so a hand-edited URL can't ask for a negative offset or a page so
+// large it would serialize the whole library in one response.
+func clampAtoi(s string, def, lo, hi int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		n = def
+	}
+	if n < lo {
+		n = lo
+	}
+	if n > hi {
+		n = hi
+	}
+	return n
 }
 
 // GET /api/geo — all geotagged photos with their coordinates (for the map).
@@ -4273,6 +4468,7 @@ func main() {
 	mux.HandleFunc("/api/server-info", protected(getOnly(serverInfoHandler)))
 	mux.HandleFunc("/api/qr", protected(getOnly(qrHandler)))
 	mux.HandleFunc("/api/on-this-day", protected(getOnly(onThisDayHandler)))
+	mux.HandleFunc("/api/timeline", protected(getOnly(timelineHandler)))
 	mux.HandleFunc("/api/geo", protected(getOnly(geoHandler)))
 	mux.HandleFunc("/api/search", protected(getOnly(searchHandler)))
 	mux.HandleFunc("/api/search/semantic", protected(getOnly(semanticSearchHandler)))
@@ -4286,6 +4482,7 @@ func main() {
 
 	// ── Open / public (PWA assets + setup helper) ──
 	mux.HandleFunc("/manifest.json", manifestHandler)
+	mux.HandleFunc("/share-target", shareTargetHandler)
 	mux.HandleFunc("/icon-192.png", func(w http.ResponseWriter, r *http.Request) { servePWAIcon(w, 192) })
 	mux.HandleFunc("/icon-512.png", func(w http.ResponseWriter, r *http.Request) { servePWAIcon(w, 512) })
 

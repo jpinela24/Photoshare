@@ -1051,6 +1051,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
       {/* Bottom buttons */}
       <div className="sidebar-divider" style={{marginTop:'auto'}} />
       <div className="sidebar-utils">
+        <button className={`util-btn ${currentPath === TIMELINE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TIMELINE_PATH)}><CalendarIcon size={14} /> Timeline</button>
         <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
         <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
         <button className={`util-btn ${currentPath === DUPES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(DUPES_PATH)}><CopyIcon size={14} /> Duplicates</button>
@@ -1065,6 +1066,15 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
 const DUPES_PATH = '__duplicates__'
 const MEMORIES_PATH = '__memories__'
 const MAP_PATH = '__map__'
+const TIMELINE_PATH = '__timeline__'
+
+// The special views render their own content instead of a folder listing, so
+// the grid, toolbar, drag-drop and browse fetch all sit them out. One predicate
+// rather than a chain repeated at each site — that chain had to be edited in
+// five places every time a view was added, which is how a view ends up half
+// wired in.
+const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH]
+const isSpecialPath = (p) => SPECIAL_PATHS.includes(p)
 
 // ── MapView (geotagged photos on a map) ────────────────────────────────────────
 function MapView({ onOpen }) {
@@ -1152,6 +1162,157 @@ function MemoriesView({ onOpen }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── TimelineView ──────────────────────────────────────────────────────────────
+//
+// The library newest-first by capture date, independent of folders. Folders
+// answer "where did I put it"; this answers "roughly when", which is how you
+// look for a photo once there are more than a few thousand.
+//
+// Pages in as you scroll rather than loading everything: a large library is
+// megabytes of JSON, which is slow to parse and painful on a phone. The month
+// rail jumps straight to an offset the server already computed, so reaching
+// 2019 costs one request rather than scrolling through every year since.
+
+const PAGE = 200
+
+function TimelineView({ onOpen, onItems }) {
+  const [items, setItems]     = useState([])
+  const [buckets, setBuckets] = useState([])
+  const [total, setTotal]     = useState(0)
+  const [built, setBuilt]     = useState(true)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState(null)
+  const nextRef   = useRef(0)     // offset of the next page
+  const loadingRef = useRef(false) // guards against overlapping scroll fetches
+  const sentinel  = useRef(null)
+
+  // from === null continues the current run; a number restarts at that offset
+  // (a jump from the month rail).
+  const load = useCallback(async (from = null) => {
+    if (loadingRef.current) return
+    const restart = from !== null
+    const offset = restart ? from : nextRef.current
+    if (!restart && offset > 0 && offset >= total && total > 0) return
+    loadingRef.current = true
+    setLoading(true)
+    try {
+      const r = await fetch(`/api/timeline?offset=${offset}&limit=${PAGE}`)
+      if (!r.ok) throw new Error(`Server error ${r.status}`)
+      const d = await r.json()
+      setBuilt(d.built)
+      setTotal(d.total)
+      if (d.buckets) setBuckets(d.buckets)
+      nextRef.current = offset + d.items.length
+      setItems(prev => {
+        if (restart) return d.items
+        // The index rebuilds daily; if that happens mid-scroll the same path
+        // can arrive twice. Drop repeats rather than rendering a duplicate
+        // card with a duplicate React key.
+        const seen = new Set(prev.map(i => i.path))
+        return [...prev, ...d.items.filter(i => !seen.has(i.path))]
+      })
+      setError(null)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      loadingRef.current = false
+      setLoading(false)
+    }
+  }, [total])
+
+  useEffect(() => { load(0) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Hand the loaded items to the viewer so ‹ › and the strip work here the way
+  // they do in a folder. It re-publishes as more pages arrive, so navigation
+  // reaches everything scrolled in so far.
+  useEffect(() => { onItems?.(items) }, [items, onItems])
+  useEffect(() => () => onItems?.(null), [onItems]) // release on unmount
+
+  // Poll until the date index exists — on a cold start it is built a few
+  // seconds after boot, same as On This Day.
+  useEffect(() => {
+    if (built) return
+    const iv = setInterval(() => load(0), 3000)
+    return () => clearInterval(iv)
+  }, [built, load])
+
+  // Load the next page when the sentinel scrolls into view. rootMargin starts
+  // the fetch before it is visible so scrolling stays smooth.
+  useEffect(() => {
+    const el = sentinel.current
+    if (!el) return
+    const io = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) load()
+    }, { rootMargin: '600px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [load])
+
+  const jumpTo = (b) => {
+    // .main is the scroll container; the window itself doesn't scroll.
+    document.querySelector('.main')?.scrollTo({ top: 0 })
+    load(b.offset)
+  }
+
+  if (!built) return <div className="status"><div className="spinner" /><span>Building the date index…</span></div>
+  if (error && !items.length) return <div className="status muted">Couldn't load the timeline: {error}</div>
+  if (!loading && !items.length) return <div className="status muted">No photos or videos yet.</div>
+
+  // Insert a header whenever the month changes. The list is already sorted by
+  // the server, so this is a single pass with no grouping pass of its own.
+  let lastMonth = null
+  const rows = []
+  for (const it of items) {
+    const d = new Date(it.taken * 1000)
+    const key = `${d.getFullYear()}-${d.getMonth()}`
+    if (key !== lastMonth) {
+      lastMonth = key
+      rows.push({ header: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }), key })
+    }
+    rows.push({ item: it })
+  }
+
+  const more = nextRef.current < total
+
+  return (
+    <div className="timeline-view">
+      <div className="timeline-head">
+        <h2 className="trash-title"><CalendarIcon size={18} /> Timeline</h2>
+        <span className="memories-sub">{total.toLocaleString()} item{total !== 1 ? 's' : ''}, newest first</span>
+      </div>
+
+      <div className="timeline-body">
+        <div className="timeline-scroll">
+          {rows.map(r => r.header ? (
+            <div key={`h-${r.key}`} className="timeline-month">{r.header}</div>
+          ) : (
+            <button key={r.item.path} className="memories-cell" title={r.item.name}
+              onClick={() => onOpen({ name: r.item.name, path: r.item.path, isVideo: r.item.isVideo })}>
+              <img src={`/api/thumb?path=${encodeURIComponent(r.item.path)}`} alt={r.item.name} loading="lazy" />
+              {r.item.isVideo && <span className="memories-play"><PlayIcon size={14} /></span>}
+            </button>
+          ))}
+          <div ref={sentinel} className="timeline-sentinel">
+            {loading && <div className="spinner" />}
+            {!loading && !more && items.length > 0 && <span className="muted">That's everything.</span>}
+          </div>
+        </div>
+
+        {buckets.length > 1 && (
+          <nav className="timeline-rail" aria-label="Jump to month">
+            {buckets.map(b => (
+              <button key={b.key} className="timeline-rail-btn" onClick={() => jumpTo(b)} title={`${b.count} item${b.count !== 1 ? 's' : ''}`}>
+                <span className="timeline-rail-label">{b.label}</span>
+                <span className="timeline-rail-count">{b.count}</span>
+              </button>
+            ))}
+          </nav>
+        )}
+      </div>
     </div>
   )
 }
@@ -2471,6 +2632,9 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
   if (path === MAP_PATH) {
     return <div className="address-bar"><span className="address-display"><MapPinIcon size={14} /> Map</span></div>
   }
+  if (path === TIMELINE_PATH) {
+    return <div className="address-bar"><span className="address-display"><CalendarIcon size={14} /> Timeline</span></div>
+  }
 
   const parts = path ? path.split('/') : []
   const parent = parts.slice(0, -1).join('/')
@@ -2516,7 +2680,7 @@ function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
 
 // VirtualGrid removed — using CSS content-visibility instead
 
-const APP_VERSION = '2.19.1'
+const APP_VERSION = '2.20.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2688,6 +2852,11 @@ export default function App() {
   // move or are deleted, even when the grid was patched in place and needs no
   // re-fetch of its own.
   const [treeVersion, setTreeVersion] = useState(0)
+  // A special view (Timeline, On This Day) renders its own items, so the grid's
+  // `entries` are empty and the viewer would open on a dead end — no prev/next
+  // and an empty strip. A view publishes its ordered media here so the viewer
+  // can page through it exactly like a folder.
+  const [viewMedia, setViewMedia] = useState(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(null)
   const [selected, setSelected]       = useState(null)
@@ -2829,7 +2998,7 @@ export default function App() {
   const onGridMouseDown = (e) => {
     if (!selectMode || e.button !== 0) return
     // Only in the normal photo grid — never over Map/Memories/Trash/Duplicates.
-    if (path === MAP_PATH || path === MEMORIES_PATH || path === TRASH_PATH || path === DUPES_PATH) return
+    if (isSpecialPath(path)) return
     if (e.target.closest('.card, button, a, input, select, label, .sel-bar')) return // empty space only
     setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY })
   }
@@ -2864,11 +3033,12 @@ export default function App() {
     setLoading(true)
     setError(null)
     setSelected(null)
+    setViewMedia(null)
     setPlayingPath(null)
     setSelItems(new Set())
     setSelectMode(false)
     setGridFocus(null)
-    if (path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH) { setLoading(false); return }
+    if (isSpecialPath(path)) { setLoading(false); return }
     fetch(`/api/browse?path=${encodeURIComponent(path)}`)
       .then(r => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json() })
       .then(data => { setEntries(data || []); setLoading(false) })
@@ -2961,6 +3131,31 @@ export default function App() {
     if (path === uploadFolderName) reload() // show the new files if we're in the inbox
     else bumpTree() // otherwise just correct the inbox count in the sidebar
   }
+
+  // Android's share sheet posts straight to /share-target, which saves the
+  // files server-side and redirects back here with the result in the query
+  // string. Report it, then strip the params so a refresh doesn't re-announce
+  // an upload that already happened.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    if (!q.has('shared')) return
+    const shared = q.get('shared')
+    const skipped = Number(q.get('skipped') || 0)
+    if (shared === 'signin') {
+      setUploadStatus('Sign in first, then share again — nothing was saved.')
+    } else if (shared === 'error') {
+      setUploadStatus("That share couldn't be read — nothing was saved.")
+    } else {
+      const n = Number(shared || 0)
+      const skip = skipped ? ` · ${skipped} skipped (not a photo/video)` : ''
+      setUploadStatus(n > 0
+        ? `✓ ${n} file${n !== 1 ? 's' : ''} shared to the inbox${skip}`
+        : `Nothing was saved${skip}`)
+      if (n > 0) { bumpTree(); if (path === uploadFolderName) reload() }
+    }
+    setTimeout(() => setUploadStatus(null), 6000)
+    window.history.replaceState({}, '', window.location.pathname)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUploadDrop = (files) => {
     setDropZone(false)
@@ -3066,7 +3261,7 @@ export default function App() {
   // Keep the selectable paths (display order) current for shift-range selection.
   orderedSelRef.current = gridItems.filter(e => !e.isDir).map(e => e.path)
 
-  const media = gridItems.filter(e => !e.isDir)
+  const media = (isSpecialPath(path) && viewMedia) ? viewMedia : gridItems.filter(e => !e.isDir)
   const photoIndex = selected ? media.findIndex(e => e.path === selected.path) : -1
 
   const closeModal  = () => setSelected(null)
@@ -3232,7 +3427,7 @@ export default function App() {
         )}
 
         {/* Toolbar — integrated into topbar */}
-        {path !== TRASH_PATH && path !== DUPES_PATH && path !== MEMORIES_PATH && path !== MAP_PATH && (
+        {!isSpecialPath(path) && (
           <div className="topbar-toolbar">
             {adminToken && (
               <button
@@ -3309,7 +3504,8 @@ export default function App() {
           {path === DUPES_PATH && <DuplicatesView />}
           {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} />}
           {path === MAP_PATH && <MapView onOpen={setSelected} />}
-          {path === TRASH_PATH || path === DUPES_PATH || path === MEMORIES_PATH || path === MAP_PATH ? null : folderDupes ? (
+          {path === TIMELINE_PATH && <TimelineView onOpen={setSelected} onItems={setViewMedia} />}
+          {isSpecialPath(path) ? null : folderDupes ? (
             <DuplicatesView
               scopePath={path}
               recursive={folderDupesDeep}
@@ -3504,7 +3700,7 @@ export default function App() {
             {/* Media strip — all photos & videos in this folder */}
             <div className="modal-playlist">
               <div className="playlist-header">
-                In this folder
+                {isSpecialPath(path) ? 'In this view' : 'In this folder'}
                 <span className="playlist-count">{media.length}</span>
               </div>
               <div className="playlist-items">

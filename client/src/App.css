@@ -3473,6 +3473,63 @@ body {
 .card-folder { transition: transform 0.14s cubic-bezier(0.22, 1, 0.36, 1); }
 .card-folder:active { transform: scale(0.96); }
 
+/* ── Timeline view ────────────────────────────────────────────────────────── */
+.timeline-view { display: flex; flex-direction: column; gap: 18px; }
+.timeline-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+
+/* Grid on the left, month rail on the right. The rail is a sibling rather than
+   an overlay so it can never sit on top of the last column of thumbnails. */
+.timeline-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; }
+
+.timeline-scroll {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+/* Month headers and the loading sentinel break the grid across every column. */
+.timeline-month {
+  grid-column: 1 / -1;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--gtext);
+  padding: 14px 2px 2px;
+  /* Deliberately not sticky: the body is a themed gradient and there is no
+     single background token to paint an opaque header with, so a pinned header
+     would have thumbnails scrolling visibly through its text. The month rail
+     already tells you where you are. */
+}
+.timeline-month:first-child { padding-top: 0; }
+.timeline-sentinel {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; min-height: 48px; padding: 12px 0;
+  color: var(--gtext-dim); font-size: 0.85rem;
+}
+
+.timeline-rail {
+  position: sticky;
+  top: 0;
+  display: flex; flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #2d2d36 transparent;
+}
+.timeline-rail-btn {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  width: 100%;
+  background: none; border: 0; cursor: pointer;
+  padding: 4px 8px; border-radius: 7px;
+  color: var(--gtext-dim); font-size: 0.78rem;
+  white-space: nowrap; text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.timeline-rail-btn:hover { background: var(--glass); color: var(--gtext); }
+.timeline-rail-count { color: var(--gtext-faint); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+
 @media (prefers-reduced-motion: reduce) {
   .grid-enter, .grid-enter > * { animation: none !important; filter: none !important; }
 }
@@ -3589,4 +3646,31 @@ body {
   .grid-small  { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
   .grid-medium { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .grid-large  { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+}
+
+/* ── Timeline on phones ───────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* A vertical rail costs too much width on a phone; lay it out as a
+     horizontal strip above the grid that scrolls sideways. */
+  .timeline-body { grid-template-columns: minmax(0, 1fr); }
+  .timeline-rail {
+    grid-row: 1;
+    position: static;
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 6px;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .timeline-rail-btn {
+    width: auto;
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    padding: 5px 10px;
+  }
+  .timeline-rail-count { display: none; }
+  .timeline-scroll { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .timeline-month { font-size: 0.92rem; }
 }
