@@ -2872,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.23.2'
+const APP_VERSION = '2.24.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3772,6 +3772,21 @@ export default function App() {
                 {selectMode ? <CloseIcon size={15} /> : <SquareIcon size={15} />}
               </button>
             )}
+            {/* Type filter. Folders always stay visible under every filter, so a
+                chip can never strand you somewhere you can't navigate out of. */}
+            {!searchActive && (hasPhotos || hasVideos) && (
+              <div className="type-chips type-chips-bar" role="tablist" aria-label="Filter by type">
+                {[['all', 'All'], ['photo', 'Photos'], ['video', 'Videos']].map(([val, label]) => (
+                  <button
+                    key={val}
+                    role="tab"
+                    aria-selected={typeFilter === val}
+                    className={`type-chip ${typeFilter === val ? 'type-chip-on' : ''}`}
+                    onClick={() => setTypeFilter(val)}
+                  >{label}</button>
+                ))}
+              </div>
+            )}
             <div className="toolbar-group">
               <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
                 <option value="name">Name</option>
@@ -3880,10 +3895,10 @@ export default function App() {
             </header>
           )}
 
-          {/* Type filter — folders always stay visible so the chips never strand
-              you in a folder you can't navigate out of. */}
+          {/* Phone-only copy of the type filter — see .type-chips-page in the CSS
+              for why the top bar can't hold it at that width. */}
           {!isSpecialPath(path) && !searchActive && (hasPhotos || hasVideos) && (
-            <div className="type-chips" role="tablist" aria-label="Filter by type">
+            <div className="type-chips type-chips-page" role="tablist" aria-label="Filter by type">
               {[['all', 'All'], ['photo', 'Photos'], ['video', 'Videos']].map(([val, label]) => (
                 <button
                   key={val}

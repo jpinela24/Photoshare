@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.23.2** · Linux / Docker · Windows
+**Current version: v2.24.0** · Linux / Docker · Windows
 
 ---
 
@@ -235,6 +235,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.24.0** | **Filter chips move into the top bar** — **All / Photos / Videos** now sit beside the sort control instead of above the grid, and the search field gives up most of its width to make room. Search keeps a usable minimum so it can't collapse to just the magnifier, and the Upload button drops its label below 1150px. On phones the chips stay above the grid: the top bar is held to two rows there and cannot fit chips, search and the tools at once |
 | **2.23.2** | **Back goes back one folder** — opening a folder from the **grid** never recorded a history entry (only the sidebar and breadcrumbs did), so Back skipped every folder opened that way and jumped to the last entry the sidebar happened to record — usually all the way home. Grid and search-result folders are now recorded like any other navigation, and the history index is tracked so Back, Forward and the disabled states stay in step |
 | **2.23.1** | **Select All respects the All/Photos/Videos filter** — with a filter on, both **⌘/Ctrl+A** and the **Select All** button selected the whole folder, including items the filter had hidden, so a Move or Delete could act on files that were not on screen. Both now select only what is visible, and switching the filter drops anything it just hid. Introduced in 2.21.0 with the filter chips |
 | **2.23.0** | **Restore several files at once from the Recycle Bin** — checkboxes and a **Select all**, with a selection bar to **Restore** or **Delete forever** everything picked. A restore that partly fails now reports what worked instead of stopping at the first error. Also fixes two light-mode contrast bugs on that screen: the row's **Restore** button kept its dark-theme ink and sat at roughly 1.5:1 on white — effectively invisible — and the delete buttons were not much better |

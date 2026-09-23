@@ -4044,3 +4044,47 @@ body {
   border-color: rgba(185, 28, 28, 0.30);
   color: #b91c1c;
 }
+
+/* ── Filter chips in the top bar ─────────────────────────────────────────── */
+/* They moved out of the content area, so they need to read as bar controls:
+   shorter, tighter, and sized to sit level with the sort control beside them. */
+.topbar-toolbar .type-chips { margin: 0; gap: 4px; flex-shrink: 0; }
+.topbar-toolbar .type-chip {
+  padding: 0 11px;
+  height: 30px;
+  display: inline-flex; align-items: center;
+  font-size: 0.79rem;
+  border-radius: 8px;
+}
+
+/* Search gives up most of its width — it's the least-used control in the bar,
+   and the chips need somewhere to come from. The min-width matters: the base
+   rule sets min-width:0 so it can shrink, and without a floor here it
+   collapsed to just the magnifier with a zero-width input. */
+.topbar-search { flex: 0 1 300px; max-width: 340px; min-width: 170px; }
+
+/* Between the phone layout and a roomy desktop there isn't width for every
+   label. Drop the Upload button's text first — it keeps its icon and tooltip,
+   and it's the widest thing that can lose its label without becoming
+   ambiguous. */
+@media (max-width: 1150px) {
+  .upload-cta-text { display: none; }
+}
+
+@media (max-width: 768px) {
+  /* On a phone the chips take the row the search field used to dominate, so the
+     field shrinks to whatever is left rather than forcing a third row. */
+  .topbar-search { flex: 1 1 70px; max-width: none; }
+  .topbar-toolbar .type-chip { padding: 0 9px; height: 28px; font-size: 0.75rem; }
+  .topbar-toolbar .type-chips { gap: 3px; }
+}
+
+/* One filter, two homes. On a wide bar the chips sit with the other controls;
+   at phone width the bar is held to two rows and cannot fit chips, the search
+   field and the tools at once, so the chips return to just above the grid.
+   Both copies are driven by the same state, and only ever one is visible. */
+.type-chips-page { display: none; }
+@media (max-width: 768px) {
+  .type-chips-bar  { display: none; }
+  .type-chips-page { display: flex; }
+}
