@@ -2872,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.24.0'
+const APP_VERSION = '2.24.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3070,7 +3070,17 @@ export default function App() {
   // and an empty strip. A view publishes its ordered media here so the viewer
   // can page through it exactly like a folder.
   const [viewMedia, setViewMedia] = useState(null)
-  const [typeFilter, setTypeFilter] = useState('all') // all | photo | video
+  // Remembered, like tile size: it's a way of looking at the library rather
+  // than a property of one folder, so re-applying it on every navigation was
+  // just friction. The active chip is always visible in the bar, so a sticky
+  // filter can't leave you wondering where your photos went.
+  const [typeFilter, setTypeFilter] = useState(() => {   // all | photo | video
+    try {
+      const v = localStorage.getItem('ps-type-filter')
+      return v === 'photo' || v === 'video' ? v : 'all'
+    } catch { return 'all' }
+  })
+  useEffect(() => { try { localStorage.setItem('ps-type-filter', typeFilter) } catch {} }, [typeFilter])
   const [favorites, setFavorites] = useState(() => new Set())
   const [favVersion, setFavVersion] = useState(0) // bumped to refetch the view
   const uploadInputRef = useRef(null)
@@ -3275,7 +3285,6 @@ export default function App() {
     setError(null)
     setSelected(null)
     setViewMedia(null)
-    setTypeFilter('all')
     setPlayingPath(null)
     setSelItems(new Set())
     setSelectMode(false)
@@ -3997,8 +4006,17 @@ export default function App() {
             {!loading && !error && entries.length === 0 && (
               <div className="status muted">No photos, videos or folders here.</div>
             )}
+            {/* The folder has contents but the filter hides all of them. Now
+                that the filter persists across folders this is easy to land in,
+                and an unexplained blank grid would look like an empty folder. */}
+            {!loading && !error && entries.length > 0 && gridItems.length === 0 && (
+              <div className="status muted">
+                Nothing here matches the {typeFilter === 'video' ? 'Videos' : 'Photos'} filter.
+                <button className="inline-link" onClick={() => setTypeFilter('all')}>Show all</button>
+              </div>
+            )}
           </>)}
-          {(searchActive ? !searching && gridItems.length > 0 : !loading && !error && entries.length > 0) && (
+          {(searchActive ? !searching && gridItems.length > 0 : !loading && !error && gridItems.length > 0) && (
             <div className={`grid grid-${gridSize} grid-enter`} key={searchActive ? 'search' : path}>
               {gridItems.map((entry, idx) => (
                 entry.isVideo

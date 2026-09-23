@@ -4088,3 +4088,12 @@ body {
   .type-chips-bar  { display: none; }
   .type-chips-page { display: flex; }
 }
+
+/* Inline text button — for offering the way out of a state the user is stuck
+   in, next to the sentence explaining it. */
+.inline-link {
+  background: none; border: 0; padding: 0; margin-left: 6px;
+  color: var(--accent); font: inherit; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.inline-link:hover { color: var(--gtext); }
