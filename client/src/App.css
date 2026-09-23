@@ -3573,7 +3573,6 @@ body {
   .logo            { order: 2; font-size: 0.82rem; }
   .theme-btn       { order: 3; }
   .tile-btn        { order: 4; }
-  .qr-btn          { display: none; } /* "connect a phone" — you're on the phone */
   .toolbar-group   { order: 5; }
   .upload-cta      { order: 12; }
   .topbar-right    { order: 6; margin-left: auto; gap: 5px; }
@@ -3839,3 +3838,57 @@ body {
    buttons, so it carries the auto margin that pushes both to the right edge. */
 .upload-cta { margin-left: auto; }
 @media (max-width: 768px) { .upload-cta { margin-left: 0; } }
+
+/* ── Account menu (username + log out, merged) ───────────────────────────── */
+.topbar-right { position: relative; }
+.user-chip-btn {
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.user-chip-btn:hover, .user-chip-open { background: var(--glass-2); border-color: var(--glass-border-2); }
+.user-chip-caret { display: inline-flex; color: var(--gtext-faint); margin-left: 1px; }
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 180px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  /* Opaque, not translucent: the grid scrolls underneath and thumbnails
+     showing through a menu makes the text unreadable. */
+  background: var(--menu-bg, #17171c);
+  box-shadow: var(--gshadow);
+}
+:root[data-theme="light"] .user-menu { --menu-bg: #ffffff; }
+.user-menu-head {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 7px 10px 9px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 5px;
+}
+.user-menu-name { font-size: 0.85rem; font-weight: 600; color: var(--gtext); word-break: break-all; }
+.user-menu-role { font-size: 0.72rem; color: var(--gtext-dim); }
+.user-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0; border-radius: 8px;
+  background: none;
+  color: var(--gtext);
+  font-size: 0.85rem; font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.user-menu-item:hover { background: var(--glass-2); }
+
+/* Phones keep the chip icon-only. Showing the name here made the group too
+   wide for the first row and pushed the bar back to three rows; the menu it
+   opens is headed with the username anyway, so nothing is actually lost. */
+@media (max-width: 768px) {
+  .user-menu { min-width: 160px; }
+}

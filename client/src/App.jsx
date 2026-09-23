@@ -2156,6 +2156,7 @@ function SettingsModal({ adminToken, onClose }) {
   const [updateBusy, setUpdateBusy] = useState(false)
   const [notifyTest, setNotifyTest] = useState(null) // null | 'sending' | 'ok' | 'fail'
   const [tab, setTab]               = useState('library')
+  const [showQR, setShowQR]         = useState(false)
 
   useEffect(() => {
     fetch('/api/settings', { credentials: 'same-origin' })
@@ -2294,6 +2295,9 @@ function SettingsModal({ adminToken, onClose }) {
                 {/* ── Server ── */}
                 {tab === 'server' && (
                   <>
+                    <SettingRow title="Connect a phone" desc="Scan this with a phone on the same network to open PhotoShare there." stacked>
+                      <button className="adm-btn" onClick={() => setShowQR(true)}><QrIcon size={14} /> Show QR code</button>
+                    </SettingRow>
                     {isWindows && (
                       <SettingRow title="Web access on your network" desc="Let phones and other computers open PhotoShare in a browser. When off, only this PC can use it.">
                         <Toggle checked={!cfg.disableWebUI} onChange={v => set('disableWebUI', !v)} />
@@ -2419,6 +2423,7 @@ function SettingsModal({ adminToken, onClose }) {
           onConfirm={p => { set('photoDir', p); setShowPicker(false) }}
         />
       )}
+      {showQR && <QRModal onClose={() => setShowQR(false)} />}
     </div>
   )
 }
@@ -2622,7 +2627,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.21.0'
+const APP_VERSION = '2.21.1'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2816,6 +2821,18 @@ export default function App() {
     applyTheme(next); setTheme(next)
   }
   const [showQR, setShowQR] = useState(false)
+  const [userMenu, setUserMenu] = useState(false)
+  const userMenuRef = useRef(null)
+  // Close on a click anywhere outside, or on Escape — a menu you can only
+  // dismiss by hitting the same small target again is a trap.
+  useEffect(() => {
+    if (!userMenu) return
+    const onDown = (e) => { if (!userMenuRef.current?.contains(e.target)) setUserMenu(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setUserMenu(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [userMenu])
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [playingPath, setPlayingPath] = useState(null)
   // First-run check: true if no photo library path has been configured yet
@@ -3381,10 +3398,6 @@ export default function App() {
           {gridSize === 'small' ? <GridSmallIcon size={15} /> : gridSize === 'medium' ? <GridMediumIcon size={15} /> : <SquareIcon size={15} />}
         </button>
 
-        <button className="theme-btn qr-btn" onClick={() => setShowQR(true)} title="Connect a phone (QR code)">
-          <QrIcon size={16} />
-        </button>
-
         {/* Search — persistent, and the widest thing in the bar. It replaced the
             address bar: location is now carried by the page header's
             breadcrumb, which is clickable in the same way and doesn't have to
@@ -3466,12 +3479,29 @@ export default function App() {
           onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = '' }}
         />
 
-        <div className="topbar-right">
-          <span className="user-chip" title={me.role === 'admin' ? 'Administrator' : 'View-only'}>
+        <div className="topbar-right" ref={userMenuRef}>
+          <button
+            className={`user-chip user-chip-btn ${userMenu ? 'user-chip-open' : ''}`}
+            onClick={() => setUserMenu(v => !v)}
+            aria-haspopup="menu"
+            aria-expanded={userMenu}
+            title={`${me.username} — ${me.role === 'admin' ? 'Administrator' : 'View-only'}`}
+          >
             {me.role === 'admin' ? <UnlockIcon size={13} /> : <LockIcon size={13} />}
             <span className="user-chip-name">{me.username}</span>
-          </span>
-          <button className="adm-topbtn" onClick={handleLogout} title="Log out"><LogoutIcon size={14} /></button>
+            <span className="user-chip-caret" aria-hidden="true"><ChevronDown /></span>
+          </button>
+          {userMenu && (
+            <div className="user-menu" role="menu">
+              <div className="user-menu-head">
+                <span className="user-menu-name">{me.username}</span>
+                <span className="user-menu-role">{me.role === 'admin' ? 'Administrator' : 'View-only'}</span>
+              </div>
+              <button className="user-menu-item" role="menuitem" onClick={() => { setUserMenu(false); handleLogout() }}>
+                <LogoutIcon size={14} /> Log out
+              </button>
+            </div>
+          )}
         </div>
 
       </header>
