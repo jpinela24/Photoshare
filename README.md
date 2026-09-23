@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.22.0** · Linux / Docker · Windows
+**Current version: v2.23.0** · Linux / Docker · Windows
 
 ---
 
@@ -44,7 +44,7 @@ tray icon and a native window (Windows).
 ### Manage (admin)
 - Delete, move, copy, rename, rotate — single or batch.
 - **Drag-and-drop** onto sidebar folders; **shift-click range** and **marquee** multi-select.
-- **Recycle bin** — restore deleted items; auto-purges after 90 days.
+- **Recycle bin** — restore deleted items, **several at a time** with checkboxes and Select all; auto-purges after 90 days.
 - **Uploads** — public inbox + authenticated uploads, with optional **auto-sort into Year/Month** folders by capture date.
 - **Share to PhotoShare (Android)** — install to the home screen and PhotoShare appears in the system share sheet; shared photos go straight to the inbox. Uses the Web Share Target API, which **iOS does not implement** — on iPhone (and on a laptop) use the upload page or drag-and-drop.
 
@@ -235,6 +235,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.23.0** | **Restore several files at once from the Recycle Bin** — checkboxes and a **Select all**, with a selection bar to **Restore** or **Delete forever** everything picked. A restore that partly fails now reports what worked instead of stopping at the first error. Also fixes two light-mode contrast bugs on that screen: the row's **Restore** button kept its dark-theme ink and sat at roughly 1.5:1 on white — effectively invisible — and the delete buttons were not much better |
 | **2.22.0** | **Favorites, library health, and a tidier sidebar** — **Favorites**: star a photo from the viewer and it lands in a new Favorites view. The list is **server-side and per account**, so unlike the pinned folders it sits next to, it is the same on every device and survives clearing site data; stars also follow a file when it is moved. **Library health** (Settings → System): thumbnail pre-generation already decodes every photo and video, so anything it cannot read is now listed with the reason — a standing corruption check over the whole library that costs nothing extra. **On This Day** and **Map** viewers gained working ‹ › arrows and a filmstrip; opening a photo from either used to be a dead end. The sidebar is reorganised: Timeline, Favorites, On This Day and Map move to the top under **Library**, and **Rebuild Thumbnails** moves down beside Duplicates with the other maintenance tools |
 | **2.21.4** | **Service worker (for PWA install)** — adds a deliberately inert service worker at `/sw.js`. It caches nothing and never intercepts a response; it exists only because Chrome gates **PWA installability** on a registered worker with a fetch handler, and installing to the home screen is what the Android **share target** needs. Note that installability also requires **HTTPS** — a plain-HTTP LAN deployment stays non-installable, and there the worker simply never registers |
 | **2.21.3** | **Quieter amber accents** — the Upload button and the selected tab in Settings were solid blocks of accent colour, the loudest things on screen. They now use the sidebar's Upload Inbox treatment: amber text and icon on a soft tint, no solid fill. Light mode uses a darker amber so the text stays readable — contrast is 6.5:1 on dark and 4.5:1 on light, slightly better than the white-on-blue it replaced |

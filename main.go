@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.22.0"
+const appVersion = "2.23.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1531,48 +1531,39 @@ func trashThumbHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// POST /api/trash/restore  body: {"name":"...","originalPath":"..."}
-func trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
-	var body struct {
-		Name         string `json:"name"`
-		OriginalPath string `json:"originalPath"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-
-	src := filepath.Join(trashDir, filepath.Base(body.Name))
+// restoreFromTrash puts one trashed item back, returning where it landed.
+//
+// Extracted so the single and batch endpoints share exactly one implementation:
+// the path safety here is the only thing standing between a crafted
+// originalPath and a write anywhere on disk, and it must not drift between two
+// copies.
+func restoreFromTrash(name, originalPath string) (string, error) {
+	src := filepath.Join(trashDir, filepath.Base(name))
 	if _, err := os.Stat(src); err != nil {
-		http.Error(w, "file not found in trash", http.StatusNotFound)
-		return
+		return "", fmt.Errorf("not found in trash")
 	}
 
-	// Determine destination — always resolve through safePath so a crafted
-	// originalPath (e.g. "../../etc/cron.d/x") can't restore a file outside
-	// the photo library.
+	// Always resolve through safePath so a crafted originalPath (e.g.
+	// "../../etc/cron.d/x") can't restore a file outside the photo library.
 	var dest string
-	if body.OriginalPath != "" {
-		d, err := safePath(baseDir, filepath.FromSlash(body.OriginalPath))
+	if originalPath != "" {
+		d, err := safePath(baseDir, filepath.FromSlash(originalPath))
 		if err != nil {
-			http.Error(w, "invalid restore path", http.StatusBadRequest)
-			return
+			return "", fmt.Errorf("invalid restore path")
 		}
 		dest = d
 	} else {
-		// Strip timestamp prefix (e.g. 20240603_141523_filename.jpg → filename.jpg)
-		name := body.Name
-		parts := strings.SplitN(name, "_", 3)
+		// Strip timestamp prefix (20240603_141523_filename.jpg → filename.jpg)
+		n := name
+		parts := strings.SplitN(n, "_", 3)
 		if len(parts) == 3 {
-			name = parts[2]
+			n = parts[2]
 		}
-		dest = filepath.Join(baseDir, filepath.Base(name))
+		dest = filepath.Join(baseDir, filepath.Base(n))
 	}
 
-	// Ensure destination directory exists
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		http.Error(w, "cannot create destination folder: "+err.Error(), http.StatusInternalServerError)
-		return
+		return "", fmt.Errorf("cannot create destination folder: %w", err)
 	}
 
 	// Handle name conflict
@@ -1584,14 +1575,60 @@ func trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := os.Rename(src, dest); err != nil {
 		if err2 := copyFile(src, dest); err2 != nil {
-			http.Error(w, "restore failed: "+err2.Error(), http.StatusInternalServerError)
-			return
+			return "", fmt.Errorf("restore failed: %w", err2)
 		}
 		os.Remove(src)
 	}
 	os.Remove(src + ".trashinfo")
 	log.Printf("[TRASH] restored: %s → %s", src, dest)
-	w.WriteHeader(http.StatusOK)
+	return dest, nil
+}
+
+// POST /api/trash/restore
+//
+// Takes either one item — {"name":"...","originalPath":"..."} — or a batch:
+// {"items":[{"name":"...","originalPath":"..."}]}. One endpoint rather than
+// two so the batch can never drift from the single-item path safety.
+func trashRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	type trashRef struct {
+		Name         string `json:"name"`
+		OriginalPath string `json:"originalPath"`
+	}
+	var body struct {
+		trashRef
+		Items []trashRef `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	batch := body.Items
+	if len(batch) == 0 {
+		if body.Name == "" {
+			http.Error(w, "nothing to restore", http.StatusBadRequest)
+			return
+		}
+		batch = []trashRef{body.trashRef}
+	}
+
+	restored := 0
+	errs := []string{}
+	for _, it := range batch {
+		if _, err := restoreFromTrash(it.Name, it.OriginalPath); err != nil {
+			errs = append(errs, it.Name+": "+err.Error())
+			continue
+		}
+		restored++
+	}
+	// A partial failure is still a 200 with the detail in the body: the client
+	// needs to refresh its list either way, and reporting one status for a
+	// mixed batch would throw away what actually happened.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"restored": restored, "errors": errs})
 }
 
 // DELETE /api/trash/purge?file=  — permanently delete one item
@@ -1599,15 +1636,37 @@ func trashPurgeHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	file := filepath.Base(r.URL.Query().Get("file"))
-	if file == "" || file == "." {
+	// One item via ?file=, or several via a repeated ?file= — keeps the DELETE
+	// verb (no body) while letting the Recycle Bin's selection purge in one go.
+	files := r.URL.Query()["file"]
+	if len(files) == 0 {
 		http.Error(w, "invalid file", http.StatusBadRequest)
 		return
 	}
-	full := filepath.Join(trashDir, file)
-	os.RemoveAll(full)
-	os.Remove(full + ".trashinfo")
-	w.WriteHeader(http.StatusOK)
+	purged := 0
+	for _, f := range files {
+		// Base() confines this to the trash directory: a crafted "../" name
+		// must not reach anything outside it.
+		name := filepath.Base(f)
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			continue
+		}
+		full := filepath.Join(trashDir, name)
+		// RemoveAll reports success for a path that was never there, so check
+		// first — otherwise the count claims to have deleted things that did
+		// not exist.
+		_, statErr := os.Lstat(full)
+		if os.RemoveAll(full) == nil && statErr == nil {
+			purged++
+		}
+		os.Remove(full + ".trashinfo")
+	}
+	if purged == 0 {
+		http.Error(w, "invalid file", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"purged": purged})
 }
 
 // DELETE /api/trash/purge-all — empty the entire trash

@@ -3988,3 +3988,59 @@ body {
 .health-path { color: var(--gtext); word-break: break-all; }
 .health-reason { color: var(--gtext-dim); font-size: 0.72rem; word-break: break-word; }
 .health-more { padding: 8px 10px; font-size: 0.72rem; color: var(--gtext-faint); }
+
+/* ── Recycle Bin selection ───────────────────────────────────────────────── */
+.trash-check { display: flex; align-items: center; padding-right: 2px; flex-shrink: 0; }
+.trash-check input {
+  width: 17px; height: 17px;
+  accent-color: var(--accent-strong);
+  cursor: pointer;
+}
+.trash-item-sel { background: var(--glass-2); }
+
+.trash-select-btn {
+  background: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 5px 11px;
+  color: var(--gtext-dim);
+  font-size: 0.8rem; font-family: inherit;
+  cursor: pointer;
+}
+.trash-select-btn:hover { color: var(--gtext); border-color: var(--glass-border-2); }
+
+/* Sits above the list the way the grid's selection bar does, so the actions
+   are reachable without scrolling back to the top of a long bin. */
+.trash-selbar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: var(--menu-bg, #17171c);
+  box-shadow: var(--gshadow);
+}
+:root[data-theme="light"] .trash-selbar { --menu-bg: #ffffff; }
+.trash-selbar .sel-bar-count { font-size: 0.85rem; font-weight: 600; color: var(--gtext); margin-right: auto; }
+
+@media (max-width: 768px) {
+  .trash-selbar { flex-wrap: wrap; bottom: 8px; }
+  .trash-selbar .sel-bar-count { margin-right: 0; }
+}
+
+/* Light mode: these buttons kept their dark-theme ink, which lands at roughly
+   1.5:1 on a near-white surface — the Restore button was effectively invisible.
+   Darker text on a lighter tint of the same hue. */
+:root[data-theme="light"] .trash-btn-restore {
+  background: rgba(99, 102, 241, 0.10);
+  border-color: rgba(67, 56, 202, 0.30);
+  color: #4338ca;
+}
+:root[data-theme="light"] .trash-btn-purge,
+:root[data-theme="light"] .sel-bar-danger {
+  border-color: rgba(185, 28, 28, 0.30);
+  color: #b91c1c;
+}

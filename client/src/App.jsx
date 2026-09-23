@@ -1745,17 +1745,67 @@ function EmptyTrashConfirm({ onConfirm, onClose }) {
   )
 }
 
+// ConfirmDialog — a plain yes/no stop for a destructive action, styled like the
+// delete-file confirm. (Emptying the whole bin has its own countdown dialog;
+// this is for the smaller, reversible-in-principle case of a selection.)
+function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return ReactDOM.createPortal(
+    <div className="adm-overlay" onClick={onClose}>
+      <div className="adm-modal adm-confirm" onClick={e => e.stopPropagation()}>
+        <div className="adm-modal-icon adm-danger-icon"><TrashIcon size={30} /></div>
+        <h2 className="adm-modal-title">{title}</h2>
+        <p className="adm-warn">{body}</p>
+        <div className="adm-btns">
+          <button className="adm-btn" onClick={onClose}>Cancel</button>
+          <button className="adm-btn adm-btn-danger" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 function TrashView() {
   const { token } = useContext(AdminCtx)
   const [items, setItems]             = useState([])
   const [loading, setLoading]         = useState(true)
   const [status, setStatus]           = useState(null)
   const [showEmptyConfirm, setShowEmptyConfirm] = useState(false)
+  const [sel, setSel] = useState(() => new Set())
+  const [purgeConfirm, setPurgeConfirm] = useState(false)
 
   const load = () => {
     setLoading(true)
-    fetch('/api/trash').then(r => r.json()).then(data => { setItems(data || []); setLoading(false) }).catch(() => setLoading(false))
+    fetch('/api/trash').then(r => r.json())
+      .then(data => {
+        const list = data || []
+        setItems(list)
+        // Drop anything that has left the bin, so the count can't claim more
+        // than is actually selectable.
+        setSel(prev => {
+          const names = new Set(list.map(i => i.name))
+          const next = new Set([...prev].filter(n => names.has(n)))
+          return next.size === prev.size ? prev : next
+        })
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
   }
+
+  const toggleSel = (name, e) => {
+    // ⌘/Ctrl-click and plain click behave the same here: the checkbox is the
+    // only way in, so every click is an explicit toggle.
+    e?.stopPropagation?.()
+    setSel(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n })
+  }
+  const selectAll = () => setSel(new Set(items.map(i => i.name)))
+  const clearSel  = () => setSel(new Set())
 
   useEffect(() => { load() }, [])
 
@@ -1777,10 +1827,34 @@ function TrashView() {
     } else if (action.type === 'purge-all') {
       await adminFetch('/api/trash/purge-all', tok, { method: 'DELETE' })
       toast('✓ Trash emptied'); load()
+    } else if (action.type === 'restore-many') {
+      const picked = items.filter(i => sel.has(i.name))
+      const r = await adminFetch('/api/trash/restore', tok, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: picked.map(i => ({ name: i.name, originalPath: i.originalPath })) })
+      })
+      if (!r.ok) { toast('Restore failed: ' + await r.text()); return }
+      const d = await r.json()
+      const failed = d.errors?.length || 0
+      toast(failed
+        ? `Restored ${d.restored}, ${failed} failed`
+        : `✓ Restored ${d.restored} item${d.restored === 1 ? '' : 's'}`)
+      clearSel(); load()
+    } else if (action.type === 'purge-many') {
+      const qs = [...sel].map(n => `file=${encodeURIComponent(n)}`).join('&')
+      const r = await adminFetch(`/api/trash/purge?${qs}`, tok, { method: 'DELETE' })
+      toast(r.ok ? `✓ Permanently deleted ${sel.size} item${sel.size === 1 ? '' : 's'}` : 'Delete failed')
+      clearSel(); load()
     }
   }
 
   const handle = (action) => {
+    if (action.type === 'purge-many') {
+      // Permanent and plural — worth a stop, same as Empty Trash.
+      setPurgeConfirm(true)
+      return
+    }
     if (action.type === 'purge-all') {
       // Always show the countdown warning first
       setShowEmptyConfirm(true)
@@ -1800,6 +1874,11 @@ function TrashView() {
         <span className="trash-title"><TrashIcon size={16} /> Recycle Bin</span>
         <span className="trash-count">{items.length} item{items.length !== 1 ? 's' : ''}</span>
         {token && items.length > 0 && (
+          <button className="trash-select-btn" onClick={sel.size === items.length ? clearSel : selectAll}>
+            {sel.size === items.length ? 'Clear selection' : 'Select all'}
+          </button>
+        )}
+        {token && items.length > 0 && (
           <button className="trash-empty-btn" onClick={() => handle({ type: 'purge-all' })}>
             Empty Trash
           </button>
@@ -1813,7 +1892,17 @@ function TrashView() {
       {!loading && items.length > 0 && (
         <div className="trash-list">
           {items.map(item => (
-            <div key={item.name} className="trash-item">
+            <div key={item.name} className={`trash-item ${sel.has(item.name) ? 'trash-item-sel' : ''}`}>
+              {token && (
+                <label className="trash-check" onClick={e => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={sel.has(item.name)}
+                    onChange={e => toggleSel(item.name, e)}
+                    aria-label={`Select ${item.name}`}
+                  />
+                </label>
+              )}
               <div className="trash-thumb-wrap">
                 {(item.isImage || item.isVideo) ? (
                   <img className="trash-thumb" src={`/api/trash/thumb?file=${encodeURIComponent(item.name)}`} alt={item.name} loading="lazy" />
@@ -1839,6 +1928,30 @@ function TrashView() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Selection bar — only while something is picked. */}
+      {token && sel.size > 0 && (
+        <div className="trash-selbar">
+          <button className="sel-bar-close" onClick={clearSel} title="Clear selection"><CloseIcon size={14} /></button>
+          <span className="sel-bar-count">{sel.size} selected</span>
+          <button className="sel-bar-action" onClick={() => handle({ type: 'restore-many' })}>
+            <RestoreIcon size={14} /> Restore
+          </button>
+          <button className="sel-bar-action sel-bar-danger" onClick={() => handle({ type: 'purge-many' })}>
+            <TrashIcon size={14} /> Delete forever
+          </button>
+        </div>
+      )}
+
+      {purgeConfirm && (
+        <ConfirmDialog
+          title={`Delete ${sel.size} item${sel.size === 1 ? '' : 's'} forever?`}
+          body="These files will be removed from the Recycle Bin permanently. This cannot be undone."
+          confirmLabel="Delete forever"
+          onConfirm={() => { setPurgeConfirm(false); runAction(token, { type: 'purge-many' }) }}
+          onClose={() => setPurgeConfirm(false)}
+        />
       )}
 
       {/* 10-second countdown warning for Empty Trash */}
@@ -2759,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.22.0'
+const APP_VERSION = '2.23.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
