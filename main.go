@@ -548,6 +548,12 @@ type Entry struct {
 	IsVideo bool   `json:"isVideo,omitempty"`
 	Size    int64  `json:"size,omitempty"`
 	Mod     int64  `json:"mod,omitempty"`
+	// Directories only — what the folder card shows underneath the name. These
+	// ride along with the listing rather than being fetched per folder, which
+	// would be one request per card on every navigation.
+	Photos  int `json:"photos,omitempty"`
+	Videos  int `json:"videos,omitempty"`
+	Folders int `json:"folders,omitempty"`
 }
 
 var imageExts = map[string]bool{
@@ -751,6 +757,36 @@ func recoverMW(next http.Handler) http.Handler {
 	})
 }
 
+// countChildren counts a folder's immediate contents for its card caption.
+//
+// Deliberately one ReadDir and no recursion: a recursive count over a library
+// this size would turn every navigation into a full-tree walk. A folder of
+// folders therefore reports its subfolder count, not the photos inside them.
+// Errors are swallowed — a caption is not worth failing a listing over.
+func countChildren(dir string) (photos, videos, folders int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		switch {
+		case e.IsDir():
+			if !hiddenFolderNames[strings.ToLower(name)] {
+				folders++
+			}
+		case isVideo(name):
+			videos++
+		case isImage(name):
+			photos++
+		}
+	}
+	return photos, videos, folders
+}
+
 func browseHandler(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("path")
 	full, err := safePath(baseDir, rel)
@@ -791,7 +827,11 @@ func browseHandler(w http.ResponseWriter, r *http.Request) {
 			entryRel = name
 		}
 		if e.IsDir() {
-			result = append(result, Entry{Name: name, Path: entryRel, IsDir: true})
+			photos, videos, folders := countChildren(filepath.Join(full, name))
+			result = append(result, Entry{
+				Name: name, Path: entryRel, IsDir: true,
+				Photos: photos, Videos: videos, Folders: folders,
+			})
 		} else if isImage(name) || isVideo(name) {
 			info, _ := e.Info()
 			var size int64
@@ -905,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.20.0"
+const appVersion = "2.21.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.

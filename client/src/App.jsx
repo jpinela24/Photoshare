@@ -121,6 +121,21 @@ const FilterIcon      = (p) => <Svg {...p}><polygon points="22 3 2 3 10 12.46 10
 // Single-click  → play/pause inline in the grid card
 // Double-click  → open full-screen modal
 
+// folderCaption is the line under a folder's name on its card.
+//
+// The counts are the folder's immediate contents (the server does not recurse),
+// so a folder of folders reports subfolders rather than a photo total. Naming
+// what is actually being counted avoids implying a library-wide number.
+function folderCaption(entry) {
+  const parts = []
+  if (entry.photos)  parts.push(`${entry.photos.toLocaleString()} photo${entry.photos === 1 ? '' : 's'}`)
+  if (entry.videos)  parts.push(`${entry.videos.toLocaleString()} video${entry.videos === 1 ? '' : 's'}`)
+  // Only mention subfolders when there's nothing else to say — a folder with
+  // both would otherwise read as a cluttered three-part caption.
+  if (!parts.length && entry.folders) parts.push(`${entry.folders.toLocaleString()} folder${entry.folders === 1 ? '' : 's'}`)
+  return parts.join(' · ') || 'Empty'
+}
+
 // ── Folder action helpers ─────────────────────────────────────────────────────
 
 // Parse drag data — always returns an array of {path, name}
@@ -2607,80 +2622,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-// ── AddressBar ────────────────────────────────────────────────────────────────
-
-function AddressBar({ path, onNavigate, searchActive, folderDupes }) {
-  // The scoped duplicate check still "lives" in the current folder, so keep the
-  // crumbs but flag what's being shown.
-  if (folderDupes) {
-    return <div className="address-bar"><span className="address-display"><CopyIcon size={14} /> Duplicates in {path ? path.split('/').pop() : 'All Photos'}</span></div>
-  }
-  // Search spans the whole library, so showing the current folder's crumbs
-  // while its results fill the grid would misrepresent what you're looking at.
-  if (searchActive) {
-    return <div className="address-bar"><span className="address-display"><SearchIcon size={14} /> Search results</span></div>
-  }
-  if (path === TRASH_PATH) {
-    return <div className="address-bar"><span className="address-display"><TrashIcon size={14} /> Recycle Bin</span></div>
-  }
-  if (path === DUPES_PATH) {
-    return <div className="address-bar"><span className="address-display"><CopyIcon size={14} /> Duplicate Finder</span></div>
-  }
-  if (path === MEMORIES_PATH) {
-    return <div className="address-bar"><span className="address-display"><SparkleIcon size={14} /> On This Day</span></div>
-  }
-  if (path === MAP_PATH) {
-    return <div className="address-bar"><span className="address-display"><MapPinIcon size={14} /> Map</span></div>
-  }
-  if (path === TIMELINE_PATH) {
-    return <div className="address-bar"><span className="address-display"><CalendarIcon size={14} /> Timeline</span></div>
-  }
-
-  const parts = path ? path.split('/') : []
-  const parent = parts.slice(0, -1).join('/')
-  const segs = [
-    { label: 'All Photos', path: '', root: true },
-    ...parts.map((p, i) => ({ label: p, path: parts.slice(0, i + 1).join('/') }))
-  ]
-
-  return (
-    <div className="address-bar">
-      <button
-        className="address-up"
-        disabled={!path}
-        title="Up one level (Backspace)"
-        aria-label="Up one level"
-        onClick={() => onNavigate(parent)}
-      >
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-      </button>
-      <div className="address-crumbs">
-        {segs.map((seg, i) => {
-          const isLast = i === segs.length - 1
-          const inner = seg.root
-            ? <><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight:4,verticalAlign:'-2px'}}><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>{seg.label}</>
-            : seg.label
-          return (
-            <span key={seg.path} className="address-crumb-item">
-              {i > 0 && <span className="address-crumb-sep">›</span>}
-              {isLast ? (
-                <span className="address-crumb-current">{inner}</span>
-              ) : (
-                <button className="address-crumb-btn" onClick={() => onNavigate(seg.path)}>
-                  {inner}
-                </button>
-              )}
-            </span>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-// VirtualGrid removed — using CSS content-visibility instead
-
-const APP_VERSION = '2.20.0'
+const APP_VERSION = '2.21.0'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2688,6 +2630,9 @@ function prefersDark() {
 }
 function resolveTheme(pref) {
   if (pref === 'auto') return prefersDark() ? 'dark' : 'light'
+  // Amber is the dark surfaces with a warm accent, so it resolves to its own
+  // data-theme value and the stylesheet redefines only the accent tokens.
+  if (pref === 'amber') return 'amber'
   return pref === 'light' ? 'light' : 'dark'
 }
 function applyTheme(pref) {
@@ -2857,14 +2802,17 @@ export default function App() {
   // and an empty strip. A view publishes its ordered media here so the viewer
   // can page through it exactly like a folder.
   const [viewMedia, setViewMedia] = useState(null)
+  const [typeFilter, setTypeFilter] = useState('all') // all | photo | video
+  const uploadInputRef = useRef(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(null)
   const [selected, setSelected]       = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const dragOpenedSidebar = useRef(false) // sidebar auto-opened during a drag
   const [theme, setTheme] = useState(currentTheme())
+  const THEME_CYCLE = ['dark', 'light', 'auto', 'amber']
   const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : theme === 'light' ? 'auto' : 'dark'
+    const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]
     applyTheme(next); setTheme(next)
   }
   const [showQR, setShowQR] = useState(false)
@@ -3034,6 +2982,7 @@ export default function App() {
     setError(null)
     setSelected(null)
     setViewMedia(null)
+    setTypeFilter('all')
     setPlayingPath(null)
     setSelItems(new Set())
     setSelectMode(false)
@@ -3208,11 +3157,6 @@ export default function App() {
     setResults(null); setShowFilters(false)
   }
   const closeSearch = () => { clearSearch(); setSearchOpen(false) }
-  const toggleSearch = () => {
-    if (searchOpen) { closeSearch(); return }
-    setSearchOpen(true)
-    setTimeout(() => searchInputRef.current?.focus(), 0)
-  }
   // Opening a folder from search results leaves search and lands in that folder.
   const openFolder = (p) => { closeSearch(); setPath(p) }
 
@@ -3256,7 +3200,33 @@ export default function App() {
   // meaningful order already (relevance for smart search), and carry no
   // size/date, so they are shown as-is rather than run through the sorter.
   const searchActive = searchOpen && !!(query.trim() || searchType || searchFrom || searchTo)
-  const gridItems    = searchActive ? (results || []) : sortedEntries
+  const typeMatches  = (e) => typeFilter === 'all' || e.isDir || (typeFilter === 'video' ? e.isVideo : !e.isVideo)
+  const gridItems    = searchActive ? (results || []) : sortedEntries.filter(typeMatches)
+
+  // Header/chip inputs, derived from the unfiltered listing so the counts and
+  // the chips themselves don't change as you filter.
+  const hasPhotos = entries.some(e => !e.isDir && !e.isVideo)
+  const hasVideos = entries.some(e => e.isVideo)
+  const pageSummary = (() => {
+    const folders = entries.filter(e => e.isDir).length
+    const photos  = entries.filter(e => !e.isDir && !e.isVideo).length
+    const videos  = entries.filter(e => e.isVideo).length
+    const parts = []
+    if (folders) parts.push(`${folders.toLocaleString()} folder${folders === 1 ? '' : 's'}`)
+    if (photos)  parts.push(`${photos.toLocaleString()} photo${photos === 1 ? '' : 's'}`)
+    if (videos)  parts.push(`${videos.toLocaleString()} video${videos === 1 ? '' : 's'}`)
+    return parts.join(' · ') || 'Empty'
+  })()
+  const crumbTrail = (() => {
+    const trail = [{ label: 'Library', path: '' }]
+    if (!path) return [...trail, { label: 'All Photos', path: '' }]
+    let acc = ''
+    for (const seg of path.split('/')) {
+      acc = acc ? `${acc}/${seg}` : seg
+      trail.push({ label: seg, path: acc })
+    }
+    return trail
+  })()
 
   // Keep the selectable paths (display order) current for shift-range selection.
   orderedSelRef.current = gridItems.filter(e => !e.isDir).map(e => e.path)
@@ -3402,7 +3372,7 @@ export default function App() {
 
         <button className="theme-btn" onClick={toggleTheme}
           title={`Theme: ${theme} (click to change)`}>
-          {theme === 'dark' ? <MoonIcon size={16} /> : theme === 'light' ? <SunIcon size={16} /> : <MonitorIcon size={16} />}
+          {theme === 'dark' ? <MoonIcon size={16} /> : theme === 'light' ? <SunIcon size={16} /> : theme === 'amber' ? <SparkleIcon size={16} /> : <MonitorIcon size={16} />}
         </button>
 
         <button className="theme-btn tile-btn"
@@ -3415,8 +3385,26 @@ export default function App() {
           <QrIcon size={16} />
         </button>
 
-        {/* Address bar */}
-        <AddressBar path={path} onNavigate={navigate} searchActive={searchActive} folderDupes={folderDupes} />
+        {/* Search — persistent, and the widest thing in the bar. It replaced the
+            address bar: location is now carried by the page header's
+            breadcrumb, which is clickable in the same way and doesn't have to
+            compete for space with the toolbar. */}
+        <div className="topbar-search">
+          <span className="topbar-search-icon"><SearchIcon size={15} /></span>
+          <input
+            ref={searchInputRef}
+            className="topbar-search-input"
+            type="text"
+            placeholder={smart ? 'Search by what’s in your photos…' : 'Search your photos and videos…'}
+            value={query}
+            onChange={e => { setQuery(e.target.value); if (!searchOpen) setSearchOpen(true) }}
+            onFocus={() => { if (!searchOpen) setSearchOpen(true) }}
+            onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); e.currentTarget.blur(); closeSearch() } }}
+          />
+          {(query || searchType || searchFrom || searchTo) && (
+            <button className="topbar-search-clear" onClick={clearSearch} title="Clear search"><CloseIcon size={13} /></button>
+          )}
+        </div>
 
         {/* Pre-gen progress */}
         {pregenStatus?.running && (
@@ -3449,13 +3437,6 @@ export default function App() {
               </button>
             </div>
             <button
-              className={`select-toggle ${searchOpen ? 'select-toggle-active' : ''}`}
-              onClick={toggleSearch}
-              title={searchOpen ? 'Close search' : 'Search your library'}
-            >
-              <SearchIcon size={15} />
-            </button>
-            <button
               className={`select-toggle ${folderDupes ? 'select-toggle-active' : ''}`}
               onClick={() => { closeSearch(); setFolderDupes(v => !v) }}
               title={folderDupes ? 'Back to this folder' : 'Find duplicates in this folder'}
@@ -3468,6 +3449,22 @@ export default function App() {
         {/* Wraps the bar onto a second row on phones (see the mobile rules in
             App.css); collapsed to nothing on desktop. */}
         <div className="topbar-break" aria-hidden="true" />
+
+        {/* Upload is the one action people come here to perform, so it gets a
+            filled button rather than hiding behind the sidebar inbox. It sits
+            outside .topbar-right so the mobile bar can order it onto the second
+            row — inside that group it made row one too wide to fit. */}
+        <button className="upload-cta" onClick={() => uploadInputRef.current?.click()} title="Upload photos and videos to the inbox">
+          <UploadIcon size={14} /><span className="upload-cta-text">Upload Photos</span>
+        </button>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          accept="image/*,video/*"
+          style={{ display: 'none' }}
+          onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = '' }}
+        />
 
         <div className="topbar-right">
           <span className="user-chip" title={me.role === 'admin' ? 'Administrator' : 'View-only'}>
@@ -3499,6 +3496,42 @@ export default function App() {
           onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDropZone(false) }}
           onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) handleUploadDrop(e.dataTransfer.files) }}
         >
+          {/* Page header — the folder's identity and size, stated plainly. The
+              address bar shows the same trail compressed into the top bar; this
+              is the one the eye lands on when a page loads. */}
+          {!isSpecialPath(path) && !searchActive && (
+            <header className="page-head">
+              <h1 className="page-title">{path ? path.split('/').pop() : 'All Photos'}</h1>
+              <div className="page-sub">{pageSummary}</div>
+              <nav className="page-crumbs" aria-label="Breadcrumb">
+                {crumbTrail.map((c, i) => (
+                  <span key={c.path || 'root'} className="page-crumb">
+                    {i > 0 && <span className="page-crumb-sep" aria-hidden="true"><ChevronRight /></span>}
+                    {i === crumbTrail.length - 1
+                      ? <span className="page-crumb-cur" aria-current="page">{c.label}</span>
+                      : <button className="page-crumb-btn" onClick={() => navigate(c.path)}>{c.label}</button>}
+                  </span>
+                ))}
+              </nav>
+            </header>
+          )}
+
+          {/* Type filter — folders always stay visible so the chips never strand
+              you in a folder you can't navigate out of. */}
+          {!isSpecialPath(path) && !searchActive && (hasPhotos || hasVideos) && (
+            <div className="type-chips" role="tablist" aria-label="Filter by type">
+              {[['all', 'All'], ['photo', 'Photos'], ['video', 'Videos']].map(([val, label]) => (
+                <button
+                  key={val}
+                  role="tab"
+                  aria-selected={typeFilter === val}
+                  className={`type-chip ${typeFilter === val ? 'type-chip-on' : ''}`}
+                  onClick={() => setTypeFilter(val)}
+                >{label}</button>
+              ))}
+            </div>
+          )}
+
           {/* Special views */}
           {path === TRASH_PATH && <TrashView />}
           {path === DUPES_PATH && <DuplicatesView />}
@@ -3517,16 +3550,9 @@ export default function App() {
           {searchOpen && (
             <div className="grid-search">
               <div className="grid-search-row">
-                <span className="grid-search-icon"><SearchIcon size={15} /></span>
-                <input
-                  ref={searchInputRef}
-                  className="grid-search-input"
-                  type="text"
-                  placeholder={smart ? 'Search by what’s in your photos…' : 'Search your library…'}
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeSearch() } }}
-                />
+                {/* The text input lives in the top bar now — two fields bound to
+                    the same query would be a trap. What's left is the controls
+                    that only matter while a search is open. */}
                 {aiReady && (
                   <button
                     className={`grid-search-btn ${smart ? 'active' : ''}`}
@@ -3602,7 +3628,13 @@ export default function App() {
                     <div key={entry.path} role="button" tabIndex={0} className={`card card-folder ${gridFocus === idx ? 'card-grid-focus' : ''}`} onClick={() => { setGridFocus(idx); openFolder(entry.path) }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGridFocus(idx); openFolder(entry.path) } }} title={entry.name} style={{position:'relative'}}>
                       <TrashBtn entry={entry} />
                       <FolderThumb folderPath={entry.path} />
-                      <div className="card-label">{entry.name}</div>
+                      <div className="card-label">
+                        <div className="card-label-text">
+                          <span className="card-label-name">{entry.name}</span>
+                          <span className="card-label-meta">{folderCaption(entry)}</span>
+                        </div>
+                        <span className="card-label-chev"><ChevronRight /></span>
+                      </div>
                     </div>
                   ) : (
                     <PhotoCard key={entry.path} entry={entry} onOpen={setSelected} adminToken={adminToken} selectMode={selectMode} isSelected={selItems.has(entry.path)} onToggle={toggleSelect} onDeleteRequest={handleDeleteRequest} focused={gridFocus === idx} onFocus={() => setGridFocus(idx)} selItems={selItems} />
