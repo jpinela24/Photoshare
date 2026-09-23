@@ -3911,3 +3911,50 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .adm-overlay { transition: none; }
 }
+
+/* ── Discreet amber ──────────────────────────────────────────────────────── */
+/* The sidebar's Upload Inbox sets the tone: amber text and icon on a
+   transparent ground, with a soft tint on hover — no solid fill. These tokens
+   carry that treatment to the other upload/settings accents so they read as
+   one family instead of competing blocks of colour.
+
+   Light mode needs a darker amber for the text: #fbbf24 on white is about
+   1.9:1, which is unreadable. The tint stays light so the surface still looks
+   amber rather than brown. */
+:root {
+  --amber-ink:  #fbbf24;
+  --amber-tint: rgba(251, 191, 36, 0.12);
+  --amber-line: rgba(251, 191, 36, 0.28);
+  --amber-hover: rgba(251, 191, 36, 0.20);
+}
+:root[data-theme="light"] {
+  --amber-ink:  #b45309;
+  --amber-tint: rgba(245, 158, 11, 0.13);
+  --amber-line: rgba(180, 83, 9, 0.26);
+  --amber-hover: rgba(245, 158, 11, 0.22);
+}
+
+/* Upload: the sidebar's treatment, promoted to the top bar. */
+.upload-cta,
+:root[data-theme="amber"] .upload-cta {
+  background: var(--amber-tint);
+  border: 1px solid var(--amber-line);
+  color: var(--amber-ink);
+}
+.upload-cta:hover,
+:root[data-theme="amber"] .upload-cta:hover {
+  background: var(--amber-hover);
+  filter: none;
+}
+
+/* Settings: the active tab was a solid block of accent, the loudest thing in
+   the panel. Same tinted treatment, with the amber bar the sidebar uses to
+   mark a selected row. */
+.set-nav-active,
+.set-nav-active:hover,
+:root[data-theme="amber"] .set-nav-active,
+:root[data-theme="amber"] .set-nav-active:hover {
+  background: var(--amber-tint);
+  color: var(--amber-ink);
+  box-shadow: inset 3px 0 0 var(--amber-ink);
+}
