@@ -2872,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.23.1'
+const APP_VERSION = '2.23.2'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3317,27 +3317,42 @@ export default function App() {
   const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
   const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
 
+  // The index is mirrored in a ref because navigate() both reads it (to trim
+  // the forward entries) and writes it. Reading it from state meant relying on
+  // a re-render having landed in between, which is fragile for something the
+  // Back button's correctness depends on.
+  const histIdxRef = useRef(0)
+
+  const histRef = useRef([''])
+
   const navigate = useCallback((newPath) => {
     setPath(newPath)
-    setHistory(prev => {
-      const trimmed = prev.slice(0, histIdx + 1)
-      return [...trimmed, newPath]
-    })
-    setHistIdx(prev => prev + 1)
-  }, [histIdx])
+    const at = histIdxRef.current
+    // Don't stack an entry for where you already are — Back would then need two
+    // presses to appear to do anything.
+    if (histRef.current[at] === newPath) return
+    // Navigating after going back discards the forward entries, as a browser does.
+    const next = [...histRef.current.slice(0, at + 1), newPath]
+    histRef.current = next
+    histIdxRef.current = next.length - 1
+    setHistory(next)
+    setHistIdx(histIdxRef.current)
+  }, [])
 
   const goBack = () => {
-    if (histIdx <= 0) return
-    const newIdx = histIdx - 1
-    setHistIdx(newIdx)
-    setPath(history[newIdx])
+    const at = histIdxRef.current
+    if (at <= 0) return
+    histIdxRef.current = at - 1
+    setHistIdx(at - 1)
+    setPath(histRef.current[at - 1])
   }
 
   const goForward = () => {
-    if (histIdx >= history.length - 1) return
-    const newIdx = histIdx + 1
-    setHistIdx(newIdx)
-    setPath(history[newIdx])
+    const at = histIdxRef.current
+    if (at >= histRef.current.length - 1) return
+    histIdxRef.current = at + 1
+    setHistIdx(at + 1)
+    setPath(histRef.current[at + 1])
   }
 
   const canBack    = histIdx > 0
@@ -3478,7 +3493,11 @@ export default function App() {
   }
   const closeSearch = () => { clearSearch(); setSearchOpen(false) }
   // Opening a folder from search results leaves search and lands in that folder.
-  const openFolder = (p) => { closeSearch(); setPath(p) }
+  // Opening a folder from the grid (or from search results) is navigation like
+  // any other and must be recorded — going through setPath directly is what
+  // made Back skip every folder opened this way and jump to the last entry the
+  // sidebar happened to record.
+  const openFolder = (p) => { closeSearch(); navigate(p) }
 
   const handleFileMoved = useCallback((filePath) => {
     setEntries(prev => prev.filter(e => e.path !== filePath))
