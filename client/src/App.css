@@ -3958,3 +3958,33 @@ body {
   color: var(--amber-ink);
   box-shadow: inset 3px 0 0 var(--amber-ink);
 }
+
+/* ── Favorites ───────────────────────────────────────────────────────────── */
+/* The star reads as "on" by filling with the same amber the upload and
+   settings accents use, so the highlight colour stays one family. */
+.modal-btn-fav, .modal-btn-fav:hover { color: var(--amber-ink); }
+
+/* Sidebar: the views sit above the library with a little breathing room. */
+.sidebar-views { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 6px; }
+
+/* ── Library health (Settings → System) ──────────────────────────────────── */
+.health-block { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.health-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  scrollbar-width: thin;
+}
+.health-row {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.78rem;
+}
+.health-row:last-child { border-bottom: none; }
+/* Break on the path separators so a deep path wraps instead of forcing the
+   panel to scroll sideways. */
+.health-path { color: var(--gtext); word-break: break-all; }
+.health-reason { color: var(--gtext-dim); font-size: 0.72rem; word-break: break-word; }
+.health-more { padding: 8px 10px; font-size: 0.72rem; color: var(--gtext-faint); }

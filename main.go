@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.21.4"
+const appVersion = "2.22.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3003,6 +3003,9 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 		}
 		invalidateCache(src) // key covers the source path — clear before it moves
+		if destRel, err := filepath.Rel(baseDir, dest); err == nil {
+			renameFavorite(rel, filepath.ToSlash(destRel))
+		}
 		if err := os.Rename(src, dest); err != nil {
 			err2 := copyFile(src, dest)
 			if err2 != nil {
@@ -3948,23 +3951,70 @@ func adminDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 // ── Background thumbnail pre-generation ──────────────────────────────────────
 
+// pregenFailure is one file the thumbnailer could not read.
+//
+// The count alone only ever said "something is wrong somewhere". Recording the
+// path turns pre-generation into a usable integrity check: anything that can't
+// be decoded is a file worth looking at on a drive holding photos you can't
+// replace.
+type pregenFailure struct {
+	Path   string `json:"path"`   // library-relative
+	Reason string `json:"reason"` // short, human-readable
+}
+
+// maxPregenFailures caps what we retain. A library with thousands of unreadable
+// files has a problem the first few hundred already demonstrate, and this list
+// is held in memory for the life of the process.
+const maxPregenFailures = 200
+
 type pregenState struct {
-	mu      sync.Mutex
-	running bool
-	total   int
-	done    int
-	errors  int
+	mu       sync.Mutex
+	running  bool
+	total    int
+	done     int
+	errors   int
+	failures []pregenFailure
+	finished bool // a pass has completed, so an empty list means "all readable"
+}
+
+// note records a failure. The caller must hold pregen.mu.
+func (p *pregenState) noteFailureLocked(full string, reason string) {
+	p.errors++
+	if len(p.failures) >= maxPregenFailures {
+		return
+	}
+	rel := full
+	if r, err := filepath.Rel(baseDir, full); err == nil {
+		rel = filepath.ToSlash(r)
+	}
+	// ffmpeg and image decoders emit multi-line output; keep one readable line.
+	reason = strings.TrimSpace(strings.SplitN(reason, "\n", 2)[0])
+	if len(reason) > 200 {
+		reason = reason[:200] + "…"
+	}
+	if reason == "" {
+		reason = "could not be read"
+	}
+	p.failures = append(p.failures, pregenFailure{Path: rel, Reason: reason})
 }
 
 var pregen = &pregenState{}
 
 func thumbStatusHandler(w http.ResponseWriter, r *http.Request) {
 	pregen.mu.Lock()
+	failures := append([]pregenFailure(nil), pregen.failures...)
+	if failures == nil {
+		failures = []pregenFailure{}
+	}
 	s := map[string]any{
-		"running": pregen.running,
-		"total":   pregen.total,
-		"done":    pregen.done,
-		"errors":  pregen.errors,
+		"running":  pregen.running,
+		"finished": pregen.finished,
+		"total":    pregen.total,
+		"done":     pregen.done,
+		"errors":   pregen.errors,
+		"failures": failures,
+		// True when the list was capped, so the UI can say "first 200 of N".
+		"truncated": pregen.errors > len(failures),
 	}
 	pregen.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -4025,6 +4075,8 @@ func pregenThumbs() {
 
 	pregen.mu.Lock()
 	pregen.running = true
+	pregen.finished = false
+	pregen.failures = nil
 	pregen.total = len(files)
 	pregen.mu.Unlock()
 
@@ -4054,7 +4106,12 @@ func pregenThumbs() {
 			var genErr error
 
 			if isVideo(name) {
-				if ff == "" { pregen.mu.Lock(); pregen.errors++; pregen.mu.Unlock(); return }
+				if ff == "" {
+					pregen.mu.Lock()
+					pregen.noteFailureLocked(p, "ffmpeg not installed — video thumbnails unavailable")
+					pregen.mu.Unlock()
+					return
+				}
 				args := []string{"-ss", "00:00:01", "-i", p, "-vframes", "1",
 					"-vf", "scale=300:300:force_original_aspect_ratio=increase,crop=300:300",
 					"-q:v", "3", "-y", thumbPath}
@@ -4085,7 +4142,11 @@ func pregenThumbs() {
 			}
 
 			pregen.mu.Lock()
-			if genErr != nil { pregen.errors++ } else { pregen.done++ }
+			if genErr != nil {
+				pregen.noteFailureLocked(p, genErr.Error())
+			} else {
+				pregen.done++
+			}
 			pregen.mu.Unlock()
 		}(filePath)
 	}
@@ -4093,8 +4154,15 @@ func pregenThumbs() {
 	wg.Wait()
 	pregen.mu.Lock()
 	pregen.running = false
+	pregen.finished = true
+	failed := pregen.errors
 	pregen.mu.Unlock()
-	log.Printf("[PREGEN] Done — %d thumbnails generated, %d errors", pregen.done, pregen.errors)
+	// `done` counts files already cached as well as newly built ones, so say
+	// "checked" rather than implying everything was regenerated.
+	log.Printf("[PREGEN] Done — %d files checked, %d unreadable", pregen.done, failed)
+	if failed > 0 {
+		log.Printf("[PREGEN] %d file(s) could not be read — see Settings → System for the list", failed)
+	}
 }
 
 // POST /api/thumbs/clear — delete all cached thumbnails and restart pre-gen
@@ -4541,6 +4609,15 @@ func main() {
 	mux.HandleFunc("/api/qr", protected(getOnly(qrHandler)))
 	mux.HandleFunc("/api/on-this-day", protected(getOnly(onThisDayHandler)))
 	mux.HandleFunc("/api/timeline", protected(getOnly(timelineHandler)))
+	mux.HandleFunc("/api/favorites", protected(func(w http.ResponseWriter, r *http.Request) {
+		// One path, two verbs: GET reads the list, POST toggles one entry. The
+		// POST goes through mutate() for the method + CSRF checks.
+		if r.Method == http.MethodPost {
+			withCORS(mutate(http.MethodPost, favoritesSetHandler))(w, r)
+			return
+		}
+		getOnly(favoritesListHandler)(w, r)
+	}))
 	mux.HandleFunc("/api/geo", protected(getOnly(geoHandler)))
 	mux.HandleFunc("/api/search", protected(getOnly(searchHandler)))
 	mux.HandleFunc("/api/search/semantic", protected(getOnly(semanticSearchHandler)))

@@ -60,8 +60,8 @@ const PauseIcon = () => (
 )
 
 // Minimalist stroke-icon set (replaces chunky emoji throughout the UI).
-const Svg = ({ size = 15, sw = 2, children }) => (
-  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+const Svg = ({ size = 15, sw = 2, fill = 'none', children }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill={fill} stroke="currentColor"
     strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"
     style={{ display: 'inline-block', verticalAlign: '-0.125em', flexShrink: 0 }}>
     {children}
@@ -98,6 +98,7 @@ const ArrowDownIcon   = (p) => <Svg {...p}><line x1="12" y1="5" x2="12" y2="19"/
 const GridSmallIcon   = (p) => <Svg {...p}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></Svg>
 const GridLargeIcon   = (p) => <Svg {...p}><rect x="4" y="4" width="16" height="16" rx="1"/></Svg>
 const ClockIcon       = (p) => <Svg {...p}><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></Svg>
+const StarIcon        = ({ filled = false, ...p }) => <Svg {...p} fill={filled ? 'currentColor' : 'none'}><polygon points="12 2 15.1 8.6 22 9.5 17 14.3 18.2 21.2 12 17.9 5.8 21.2 7 14.3 2 9.5 8.9 8.6 12 2"/></Svg>
 const CameraIcon      = (p) => <Svg {...p}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></Svg>
 const ImageIcon       = (p) => <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></Svg>
 const HardDriveIcon   = (p) => <Svg {...p}><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></Svg>
@@ -990,12 +991,15 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         </>
       )}
 
-      {/* Thumbnail regen button — admin only */}
-      {token && (
-        <button className="thumb-regen-btn" title="Clear and rebuild all thumbnails" onClick={async () => {
-          await adminFetch('/api/thumbs/clear', token, { method: 'POST' })
-        }}><RefreshIcon size={13} /> Rebuild Thumbnails</button>
-      )}
+        {/* Views — ways of looking at the whole library, so they sit with it
+            rather than down among the maintenance tools. */}
+        <div className="sidebar-views">
+          <button className={`util-btn ${currentPath === TIMELINE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TIMELINE_PATH)}><CalendarIcon size={14} /> Timeline</button>
+          <button className={`util-btn ${currentPath === FAVORITES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(FAVORITES_PATH)}><StarIcon size={14} /> Favorites</button>
+          <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
+          <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
+        </div>
+        <div className="sidebar-divider" />
 
         {/* Root / All Photos */}
         <button
@@ -1066,10 +1070,12 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
       {/* Bottom buttons */}
       <div className="sidebar-divider" style={{marginTop:'auto'}} />
       <div className="sidebar-utils">
-        <button className={`util-btn ${currentPath === TIMELINE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TIMELINE_PATH)}><CalendarIcon size={14} /> Timeline</button>
-        <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
-        <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
         <button className={`util-btn ${currentPath === DUPES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(DUPES_PATH)}><CopyIcon size={14} /> Duplicates</button>
+        {token && (
+          <button className="util-btn" title="Clear and rebuild every cached thumbnail" onClick={async () => {
+            await adminFetch('/api/thumbs/clear', token, { method: 'POST' })
+          }}><RefreshIcon size={14} /> Rebuild Thumbnails</button>
+        )}
         {token && <button className="util-btn" onClick={() => onShowSettings()}><GearIcon size={14} /> Settings</button>}
         <button className="util-btn" onClick={() => onShowStats()}><StatsIcon size={14} /> Storage Stats</button>
         <button className={`util-btn ${currentPath === TRASH_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TRASH_PATH)}><TrashIcon size={14} /> Recycle Bin</button>
@@ -1082,17 +1088,18 @@ const DUPES_PATH = '__duplicates__'
 const MEMORIES_PATH = '__memories__'
 const MAP_PATH = '__map__'
 const TIMELINE_PATH = '__timeline__'
+const FAVORITES_PATH = '__favorites__'
 
 // The special views render their own content instead of a folder listing, so
 // the grid, toolbar, drag-drop and browse fetch all sit them out. One predicate
 // rather than a chain repeated at each site — that chain had to be edited in
 // five places every time a view was added, which is how a view ends up half
 // wired in.
-const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH]
+const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH, FAVORITES_PATH]
 const isSpecialPath = (p) => SPECIAL_PATHS.includes(p)
 
 // ── MapView (geotagged photos on a map) ────────────────────────────────────────
-function MapView({ onOpen }) {
+function MapView({ onOpen, onItems }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const [status, setStatus] = useState('loading') // loading | building | empty | ok | error
@@ -1112,6 +1119,9 @@ function MapView({ onOpen }) {
       const pts = d.points || []
       if (!pts.length) { setStatus('empty'); return }
       setStatus('ok')
+      // Give the viewer the pins as a list so ‹ › walk the geotagged photos
+      // instead of opening on a dead end.
+      onItems?.(pts.map(p => ({ name: p.name, path: p.path, isVideo: p.isVideo })))
       setTimeout(() => map.invalidateSize(), 60)
       const markers = pts.map(p => {
         const icon = L.divIcon({ className: 'map-pin', iconSize: [14, 14] })
@@ -1137,7 +1147,7 @@ function MapView({ onOpen }) {
 }
 
 // ── MemoriesView ("On This Day") ───────────────────────────────────────────────
-function MemoriesView({ onOpen }) {
+function MemoriesView({ onOpen, onItems }) {
   const [data, setData] = useState(null)
 
   useEffect(() => {
@@ -1148,6 +1158,14 @@ function MemoriesView({ onOpen }) {
     const iv = setInterval(() => { if (!data?.built) load(); else clearInterval(iv) }, 3000)
     return () => { alive = false; clearInterval(iv) }
   }, [data?.built])
+
+  // Flatten the year groups in display order and hand them to the viewer, so
+  // opening a memory isn't a dead end — same fix the Timeline got.
+  useEffect(() => {
+    if (!data?.groups) return
+    onItems?.(data.groups.flatMap(g => g.items.map(it => ({ ...it, name: it.name }))))
+  }, [data, onItems])
+  useEffect(() => () => onItems?.(null), [onItems])
 
   const today = new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
 
@@ -1327,6 +1345,56 @@ function TimelineView({ onOpen, onItems }) {
             ))}
           </nav>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── FavoritesView ─────────────────────────────────────────────────────────────
+//
+// Starred photos, gathered from anywhere in the library. Unlike pinned folders
+// (localStorage, per browser) these live on the server, so the list is the same
+// on every device and survives clearing site data.
+
+function FavoritesView({ onOpen, onItems, version }) {
+  const [items, setItems]   = useState(null)
+  const [error, setError]   = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/favorites', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`Server error ${r.status}`)))
+      .then(d => { if (alive) { setItems(d.items || []); setError(null) } })
+      .catch(e => { if (alive) setError(e.message) })
+    return () => { alive = false }
+  }, [version])
+
+  // Let the viewer page through these the way it does a folder.
+  useEffect(() => { if (items) onItems?.(items) }, [items, onItems])
+  useEffect(() => () => onItems?.(null), [onItems])
+
+  if (error) return <div className="status muted">Couldn't load favorites: {error}</div>
+  if (!items) return <div className="status"><div className="spinner" /><span>Loading…</span></div>
+  if (!items.length) return (
+    <div className="status muted">
+      Nothing starred yet — open a photo and press the star to keep it here.
+    </div>
+  )
+
+  return (
+    <div className="memories-view">
+      <div className="memories-head">
+        <h2 className="trash-title"><StarIcon size={18} filled /> Favorites</h2>
+        <span className="memories-sub">{items.length.toLocaleString()} item{items.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div className="memories-grid">
+        {items.map(it => (
+          <button key={it.path} className="memories-cell" title={it.path}
+            onClick={() => onOpen({ name: it.name, path: it.path, isVideo: it.isVideo })}>
+            <img src={`/api/thumb?path=${encodeURIComponent(it.path)}`} alt={it.name} loading="lazy" />
+            {it.isVideo && <span className="memories-play"><PlayIcon size={14} /></span>}
+          </button>
+        ))}
       </div>
     </div>
   )
@@ -2143,6 +2211,69 @@ function AdvancedGroup({ children }) {
   )
 }
 
+// ── LibraryHealth ─────────────────────────────────────────────────────────────
+//
+// Thumbnail pre-generation already decodes every photo and video in the
+// library, so anything it fails on is a file that can't be read. That makes it
+// an integrity check that costs nothing extra — worth surfacing on a drive
+// holding photos you can't replace, where a silently corrupt file might
+// otherwise go unnoticed until you went looking for it.
+
+function LibraryHealth() {
+  const [s, setS] = useState(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    const tick = () => fetch('/api/thumbs/status', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { if (alive) setS(d) })
+      .catch(() => {})
+    tick()
+    // Poll only while a pass is running, so the panel isn't chatty at rest.
+    const iv = setInterval(() => { if (s?.running) tick() }, 3000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [s?.running])
+
+  if (!s) return null
+
+  const failures = s.failures || []
+  const desc = s.running
+    ? `Checking every photo and video… ${s.done?.toLocaleString?.() ?? s.done} of ${s.total?.toLocaleString?.() ?? s.total}.`
+    : s.errors > 0
+      ? `${s.errors.toLocaleString()} file${s.errors === 1 ? '' : 's'} could not be read. These may be corrupt, truncated, or in a format the server can't decode.`
+      : s.finished
+        ? `All ${s.done?.toLocaleString?.() ?? s.done} files read cleanly.`
+        : 'Runs automatically at startup; every readable file gets a thumbnail.'
+
+  return (
+    <SettingRow title="Library health" desc={desc} stacked>
+      {s.errors > 0 && (
+        <div className="health-block">
+          <button className="adm-btn" onClick={() => setOpen(v => !v)}>
+            {open ? 'Hide' : `Show ${failures.length} file${failures.length === 1 ? '' : 's'}`}
+          </button>
+          {open && (
+            <div className="health-list">
+              {failures.map(f => (
+                <div key={f.path} className="health-row">
+                  <span className="health-path" title={f.path}>{f.path}</span>
+                  <span className="health-reason" title={f.reason}>{f.reason}</span>
+                </div>
+              ))}
+              {s.truncated && (
+                <div className="health-more">
+                  Showing the first {failures.length} of {s.errors.toLocaleString()}.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </SettingRow>
+  )
+}
+
 function SettingsModal({ adminToken, onClose }) {
   const [cfg, setCfg]       = useState(null)
   const [orig, setOrig]     = useState(null)
@@ -2363,6 +2494,7 @@ function SettingsModal({ adminToken, onClose }) {
                 {/* ── System ── */}
                 {tab === 'system' && (
                   <>
+                    <LibraryHealth />
                     {isWindows && (
                       <SettingRow title="Start with Windows" desc="Launch PhotoShare automatically when you sign in. Applies immediately.">
                         <Toggle checked={autostart} onChange={toggleAutostart} />
@@ -2627,7 +2759,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.21.4'
+const APP_VERSION = '2.22.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -2826,6 +2958,8 @@ export default function App() {
   // can page through it exactly like a folder.
   const [viewMedia, setViewMedia] = useState(null)
   const [typeFilter, setTypeFilter] = useState('all') // all | photo | video
+  const [favorites, setFavorites] = useState(() => new Set())
+  const [favVersion, setFavVersion] = useState(0) // bumped to refetch the view
   const uploadInputRef = useRef(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(null)
@@ -3035,6 +3169,33 @@ export default function App() {
       .then(data => { setEntries(data || []); setLoading(false) })
       .catch(err => { setError(err.message); setLoading(false) })
   }, [path, me?.authenticated, reloadKey])
+
+  useEffect(() => {
+    if (!me?.authenticated) return
+    fetch('/api/favorites', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => setFavorites(new Set((d.items || []).map(i => i.path))))
+      .catch(() => {})
+  }, [me?.authenticated, favVersion])
+
+  // Optimistic: the star flips immediately and reverts if the server refuses,
+  // because waiting on a round-trip to acknowledge a star feels broken.
+  const toggleFavorite = useCallback(async (path) => {
+    const next = !favorites.has(path)
+    setFavorites(prev => { const n = new Set(prev); next ? n.add(path) : n.delete(path); return n })
+    try {
+      const r = await fetch('/api/favorites', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, favorite: next }),
+      })
+      if (!r.ok) throw new Error()
+      setFavVersion(v => v + 1) // keep the Favorites view in step
+    } catch {
+      setFavorites(prev => { const n = new Set(prev); next ? n.delete(path) : n.add(path); return n })
+    }
+  }, [favorites])
 
   const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
   const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
@@ -3590,9 +3751,10 @@ export default function App() {
           {/* Special views */}
           {path === TRASH_PATH && <TrashView />}
           {path === DUPES_PATH && <DuplicatesView />}
-          {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} />}
-          {path === MAP_PATH && <MapView onOpen={setSelected} />}
+          {path === MEMORIES_PATH && <MemoriesView onOpen={setSelected} onItems={setViewMedia} />}
+          {path === MAP_PATH && <MapView onOpen={setSelected} onItems={setViewMedia} />}
           {path === TIMELINE_PATH && <TimelineView onOpen={setSelected} onItems={setViewMedia} />}
+          {path === FAVORITES_PATH && <FavoritesView onOpen={setSelected} onItems={setViewMedia} version={favVersion} />}
           {isSpecialPath(path) ? null : folderDupes ? (
             <DuplicatesView
               scopePath={path}
@@ -3736,6 +3898,11 @@ export default function App() {
                   }}><RotateCwIcon size={14} /></button>
                 </>
               )}
+              <button
+                className={`modal-btn ${favorites.has(selected.path) ? 'modal-btn-fav' : ''}`}
+                title={favorites.has(selected.path) ? 'Remove from favorites' : 'Add to favorites'}
+                onClick={() => toggleFavorite(selected.path)}
+              ><StarIcon size={14} filled={favorites.has(selected.path)} /></button>
               <a
                 href={`/api/${selected.isVideo ? 'video' : 'photo'}?path=${encodeURIComponent(selected.path)}`}
                 download={selected.name}
