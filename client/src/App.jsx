@@ -2872,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.23.0'
+const APP_VERSION = '2.23.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3226,7 +3226,11 @@ export default function App() {
     setSelectMode(true)
   }
   const clearSelect = () => { setSelItems(new Set()); setSelectMode(false); lastSelRef.current = null }
-  const selectAll   = () => setSelItems(new Set(entries.filter(e => !e.isDir).map(e => e.path)))
+  // Select what is actually on screen, not the whole folder. gridItems is the
+  // filtered, searched, sorted list the grid renders; `entries` and
+  // `sortedEntries` both ignore the type chips, so selecting from them would
+  // quietly pick up items the user can't see — and then act on them.
+  const selectAll   = () => setSelItems(new Set(gridItems.filter(e => !e.isDir).map(e => e.path)))
 
   // ── Marquee (drag-rectangle) select ──
   const [marquee, setMarquee] = useState(null) // {x0,y0,x1,y1} in client coords
@@ -3547,6 +3551,18 @@ export default function App() {
   // Keep the selectable paths (display order) current for shift-range selection.
   orderedSelRef.current = gridItems.filter(e => !e.isDir).map(e => e.path)
 
+  // Changing the filter must also drop anything it just hid. Selecting every
+  // photo and then switching to Videos would otherwise leave those photos
+  // selected but invisible — and a batch action would still act on them.
+  useEffect(() => {
+    setSelItems(prev => {
+      if (prev.size === 0) return prev
+      const visible = new Set(gridItems.filter(e => !e.isDir).map(e => e.path))
+      const next = new Set([...prev].filter(p => visible.has(p)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const media = (isSpecialPath(path) && viewMedia) ? viewMedia : gridItems.filter(e => !e.isDir)
   const photoIndex = selected ? media.findIndex(e => e.path === selected.path) : -1
 
@@ -3574,7 +3590,7 @@ export default function App() {
 
     // Select-all (Cmd/Ctrl+A) when browsing the grid
     if (!selected && !inInput && (e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
-      const media = sortedEntries.filter(x => !x.isDir)
+      const media = gridItems.filter(x => !x.isDir) // visible only — see selectAll
       if (media.length) { e.preventDefault(); setSelItems(new Set(media.map(x => x.path))); setSelectMode(true) }
       return
     }
