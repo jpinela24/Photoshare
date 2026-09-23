@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.24.1** · Linux / Docker · Windows
+**Current version: v2.25.0** · Linux / Docker · Windows
 
 ---
 
@@ -42,7 +42,7 @@ tray icon and a native window (Windows).
 - **Map view** — plots photos by EXIF GPS on an OpenStreetMap.
 
 ### Manage (admin)
-- Delete, move, copy, rename, rotate — single or batch.
+- Delete, move, copy, rename, rotate — single or batch. **Folders can be moved too**: turn on select mode and click one.
 - **Drag-and-drop** onto sidebar folders; **shift-click range** and **marquee** multi-select.
 - **Recycle bin** — restore deleted items, **several at a time** with checkboxes and Select all; auto-purges after 90 days.
 - **Uploads** — public inbox + authenticated uploads, with optional **auto-sort into Year/Month** folders by capture date.
@@ -235,6 +235,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.25.0** | **Move folders, not just files** — in select mode, clicking a folder picks it instead of opening it, so folders can go through **Move** like anything else. Moving a folder into itself or its own subtree is refused with a clear message rather than left to the filesystem, cached thumbnails for the whole subtree are cleared, and **stars inside a moved folder follow it**. Copy stays disabled for folders (it would need a recursive copy the server doesn't do) — move them instead |
 | **2.24.1** | **The type filter sticks** — All / Photos / Videos reset to All on every navigation, so it had to be re-applied in each folder. It is now remembered across folders and across reloads, like tile size. A folder whose contents the filter hides now says so and offers **Show all**, instead of looking like an empty folder |
 | **2.24.0** | **Filter chips move into the top bar** — **All / Photos / Videos** now sit beside the sort control instead of above the grid, and the search field gives up most of its width to make room. Search keeps a usable minimum so it can't collapse to just the magnifier, and the Upload button drops its label below 1150px. On phones the chips stay above the grid: the top bar is held to two rows there and cannot fit chips, search and the tools at once |
 | **2.23.2** | **Back goes back one folder** — opening a folder from the **grid** never recorded a history entry (only the sidebar and breadcrumbs did), so Back skipped every folder opened that way and jumped to the last entry the sidebar happened to record — usually all the way home. Grid and search-result folders are now recorded like any other navigation, and the history index is tracked so Back, Forward and the disabled states stay in step |

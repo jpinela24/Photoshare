@@ -188,6 +188,40 @@ func renameFavorite(oldRel, newRel string) {
 	}
 }
 
+// renameFavoritePrefix follows a whole folder that moved, re-pointing every
+// starred file underneath it.
+//
+// A folder move relocates all of its contents at once, and favorites are keyed
+// by full path, so without this every star inside a moved folder would be
+// silently dropped the next time the list was pruned.
+func renameFavoritePrefix(oldDir, newDir string) {
+	oldDir = strings.TrimSuffix(filepath.ToSlash(oldDir), "/")
+	newDir = strings.TrimSuffix(filepath.ToSlash(newDir), "/")
+	if oldDir == newDir || oldDir == "" {
+		return
+	}
+	prefix := oldDir + "/"
+	favMu.Lock()
+	defer favMu.Unlock()
+	loadFavsLocked()
+	changed := false
+	for _, set := range favs {
+		for p := range set {
+			// Match the directory itself or anything under it, never a sibling
+			// whose name merely starts with the same characters.
+			if p != oldDir && !strings.HasPrefix(p, prefix) {
+				continue
+			}
+			delete(set, p)
+			set[newDir+strings.TrimPrefix(p, oldDir)] = true
+			changed = true
+		}
+	}
+	if changed {
+		saveFavsLocked()
+	}
+}
+
 // sessionUser identifies who a request belongs to. Favorites are per account,
 // so an unauthenticated request has nothing to return.
 func sessionUser(r *http.Request) (string, bool) {

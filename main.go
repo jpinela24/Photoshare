@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.24.1"
+const appVersion = "2.25.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3055,17 +3055,55 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 		if filepath.Dir(src) == destDir {
 			continue // already there
 		}
+		fi, statErr := os.Lstat(src)
+		if statErr != nil {
+			errs = append(errs, rel+": not found")
+			continue
+		}
+		isDir := fi.IsDir()
+		// A folder cannot be moved inside itself. os.Rename usually refuses,
+		// but the error varies by platform and the consequences of getting it
+		// wrong — a folder nested into its own subtree — are bad enough to
+		// check explicitly rather than rely on the filesystem.
+		if isDir && dirWithin(src, destDir) {
+			errs = append(errs, rel+": can't move a folder into itself")
+			continue
+		}
 		dest := filepath.Join(destDir, filepath.Base(src))
 		if _, err := os.Stat(dest); err == nil {
 			ext := filepath.Ext(dest)
 			base := strings.TrimSuffix(filepath.Base(dest), ext)
+			if isDir {
+				ext, base = "", filepath.Base(dest) // folders have no extension to split
+			}
 			dest = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 		}
-		invalidateCache(src) // key covers the source path — clear before it moves
-		if destRel, err := filepath.Rel(baseDir, dest); err == nil {
-			renameFavorite(rel, filepath.ToSlash(destRel))
+		destRel := ""
+		if d, err := filepath.Rel(baseDir, dest); err == nil {
+			destRel = filepath.ToSlash(d)
+		}
+		// Cached derivatives and stars are keyed by path, so both have to be
+		// carried across before the move — for a folder, that means everything
+		// underneath it, not just the folder itself.
+		if isDir {
+			invalidateCacheTree(src)
+			if destRel != "" {
+				renameFavoritePrefix(rel, destRel)
+			}
+		} else {
+			invalidateCache(src)
+			if destRel != "" {
+				renameFavorite(rel, destRel)
+			}
 		}
 		if err := os.Rename(src, dest); err != nil {
+			// copyFile can't do a directory, and half-copying one would be
+			// worse than refusing. Rename only fails here across filesystems,
+			// which a single library shouldn't span.
+			if isDir {
+				errs = append(errs, rel+": "+err.Error())
+				continue
+			}
 			err2 := copyFile(src, dest)
 			if err2 != nil {
 				errs = append(errs, rel+": "+err2.Error())

@@ -2872,7 +2872,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.24.1'
+const APP_VERSION = '2.25.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3240,7 +3240,7 @@ export default function App() {
   // filtered, searched, sorted list the grid renders; `entries` and
   // `sortedEntries` both ignore the type chips, so selecting from them would
   // quietly pick up items the user can't see — and then act on them.
-  const selectAll   = () => setSelItems(new Set(gridItems.filter(e => !e.isDir).map(e => e.path)))
+  const selectAll   = () => setSelItems(new Set(gridItems.map(e => e.path)))
 
   // ── Marquee (drag-rectangle) select ──
   const [marquee, setMarquee] = useState(null) // {x0,y0,x1,y1} in client coords
@@ -3577,7 +3577,7 @@ export default function App() {
   })()
 
   // Keep the selectable paths (display order) current for shift-range selection.
-  orderedSelRef.current = gridItems.filter(e => !e.isDir).map(e => e.path)
+  orderedSelRef.current = gridItems.map(e => e.path)
 
   // Changing the filter must also drop anything it just hid. Selecting every
   // photo and then switching to Videos would otherwise leave those photos
@@ -3585,13 +3585,16 @@ export default function App() {
   useEffect(() => {
     setSelItems(prev => {
       if (prev.size === 0) return prev
-      const visible = new Set(gridItems.filter(e => !e.isDir).map(e => e.path))
+      const visible = new Set(gridItems.map(e => e.path))
       const next = new Set([...prev].filter(p => visible.has(p)))
       return next.size === prev.size ? prev : next
     })
   }, [typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const media = (isSpecialPath(path) && viewMedia) ? viewMedia : gridItems.filter(e => !e.isDir)
+
+  // Folders can be selected now, and not every batch action can take one.
+  const selHasFolder = gridItems.some(e => e.isDir && selItems.has(e.path))
   const photoIndex = selected ? media.findIndex(e => e.path === selected.path) : -1
 
   const closeModal  = () => setSelected(null)
@@ -3618,7 +3621,7 @@ export default function App() {
 
     // Select-all (Cmd/Ctrl+A) when browsing the grid
     if (!selected && !inInput && (e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
-      const media = gridItems.filter(x => !x.isDir) // visible only — see selectAll
+      const media = gridItems.filter(x => !x.isDir) // media only: see the note on selectAll
       if (media.length) { e.preventDefault(); setSelItems(new Set(media.map(x => x.path))); setSelectMode(true) }
       return
     }
@@ -4023,8 +4026,30 @@ export default function App() {
                   ? <VideoCard key={entry.path} entry={entry} onOpenModal={setSelected} playingPath={playingPath} setPlayingPath={setPlayingPath} focused={gridFocus === idx} onFocus={() => setGridFocus(idx)} />
                   : entry.isDir
                   ? (
-                    <div key={entry.path} role="button" tabIndex={0} className={`card card-folder ${gridFocus === idx ? 'card-grid-focus' : ''}`} onClick={() => { setGridFocus(idx); openFolder(entry.path) }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGridFocus(idx); openFolder(entry.path) } }} title={entry.name} style={{position:'relative'}}>
-                      <TrashBtn entry={entry} />
+                    <div
+                      key={entry.path}
+                      role="button"
+                      tabIndex={0}
+                      className={`card card-folder ${gridFocus === idx ? 'card-grid-focus' : ''} ${selItems.has(entry.path) ? 'card-selected' : ''}`}
+                      onClick={e => {
+                        setGridFocus(idx)
+                        // In select mode a click picks the folder rather than
+                        // opening it, so folders can be moved like files.
+                        const additive = e.metaKey || e.ctrlKey
+                        if (selectMode || additive || e.shiftKey) { e.preventDefault(); toggleSelect(entry.path, { shift: e.shiftKey, additive }); return }
+                        openFolder(entry.path)
+                      }}
+                      onKeyDown={e => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return
+                        e.preventDefault(); setGridFocus(idx)
+                        if (selectMode) { toggleSelect(entry.path, {}); return }
+                        openFolder(entry.path)
+                      }}
+                      title={entry.name}
+                      style={{position:'relative'}}
+                    >
+                      {selectMode && <div className="card-checkbox">{selItems.has(entry.path) ? '✓' : ''}</div>}
+                      {!selectMode && <TrashBtn entry={entry} />}
                       <FolderThumb folderPath={entry.path} />
                       <div className="card-label">
                         <div className="card-label-text">
@@ -4251,7 +4276,15 @@ export default function App() {
           <button className="sel-bar-btn" onClick={selectAll}>Select All</button>
           <div className="sel-bar-divider" />
           <button className="sel-bar-action" disabled={selItems.size === 0} onClick={() => setShowRename(true)}><PencilIcon size={14} /> Rename</button>
-          <button className="sel-bar-action" disabled={selItems.size === 0} onClick={() => setPickerAction('copy')}><CopyIcon size={14} /> Copy</button>
+          {/* Copying a folder would need a recursive copy the server doesn't do,
+              so it's disabled rather than left to fail per-item with an error
+              the user can't act on. Move and Delete both work on folders. */}
+          <button
+            className="sel-bar-action"
+            disabled={selItems.size === 0 || selHasFolder}
+            title={selHasFolder ? "Folders can't be copied — move them instead" : undefined}
+            onClick={() => setPickerAction('copy')}
+          ><CopyIcon size={14} /> Copy</button>
           <button className="sel-bar-action" disabled={selItems.size === 0} onClick={() => setPickerAction('move')}><ScissorsIcon size={14} /> Move</button>
           <button className="sel-bar-action sel-bar-danger" disabled={selItems.size === 0} onClick={() => batchAction('delete')}><TrashIcon size={14} /> Delete</button>
         </div>
