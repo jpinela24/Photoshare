@@ -2627,7 +2627,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.21.1'
+const APP_VERSION = '2.21.2'
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {
@@ -2821,6 +2821,13 @@ export default function App() {
     applyTheme(next); setTheme(next)
   }
   const [showQR, setShowQR] = useState(false)
+  // The desktop sidebar pushes the content rather than floating over it, so a
+  // dialog centred on the viewport lands visibly left of the grid you're
+  // looking at. Publish the docked width and let the overlays inset by it.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--dock-inset', sidebarOpen ? '230px' : '0px')
+  }, [sidebarOpen])
+
   const [userMenu, setUserMenu] = useState(false)
   const userMenuRef = useRef(null)
   // Close on a click anywhere outside, or on Escape — a menu you can only

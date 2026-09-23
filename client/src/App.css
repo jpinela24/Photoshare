@@ -3892,3 +3892,22 @@ body {
 @media (max-width: 768px) {
   .user-menu { min-width: 160px; }
 }
+
+/* ── Dialogs centre over the content, not the window ─────────────────────── */
+/* On desktop the sidebar pushes the grid across, so a viewport-centred dialog
+   sits noticeably left of the thing it's about. Inset the overlay by the docked
+   sidebar width (published as --dock-inset from the sidebar's open state) and
+   match its transition so the dialog doesn't jump while the sidebar animates.
+   
+   Only above 1100px: on a narrower window the inset would squeeze wide dialogs
+   like Settings, and the offset isn't noticeable there anyway. The lightbox is
+   deliberately excluded — it covers the sidebar, so it belongs dead centre. */
+@media (min-width: 1100px) {
+  .adm-overlay {
+    padding-left: var(--dock-inset, 0px);
+    transition: padding-left 0.26s cubic-bezier(0.4, 0.0, 0.2, 1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .adm-overlay { transition: none; }
+}
