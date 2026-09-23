@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.21.3** · Linux / Docker · Windows
+**Current version: v2.21.4** · Linux / Docker · Windows
 
 ---
 
@@ -233,6 +233,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.21.4** | **Service worker (for PWA install)** — adds a deliberately inert service worker at `/sw.js`. It caches nothing and never intercepts a response; it exists only because Chrome gates **PWA installability** on a registered worker with a fetch handler, and installing to the home screen is what the Android **share target** needs. Note that installability also requires **HTTPS** — a plain-HTTP LAN deployment stays non-installable, and there the worker simply never registers |
 | **2.21.3** | **Quieter amber accents** — the Upload button and the selected tab in Settings were solid blocks of accent colour, the loudest things on screen. They now use the sidebar's Upload Inbox treatment: amber text and icon on a soft tint, no solid fill. Light mode uses a darker amber so the text stays readable — contrast is 6.5:1 on dark and 4.5:1 on light, slightly better than the white-on-blue it replaced |
 | **2.21.2** | **Dialogs centre over the photos, not the window** — with the sidebar open, confirmation dialogs were centred on the whole browser window, which put them visibly left of the grid they were about. They now inset by the docked sidebar width and follow it as it opens and closes. Applies above 1100px only: on a narrower window the inset would squeeze wide dialogs like Settings, and the offset isn't noticeable there. The full-screen photo viewer stays dead centre, since it covers the sidebar |
 | **2.21.1** | **One account control, and the QR code moves into Settings** — the username chip and the log-out button are now a single control: tapping your name opens a small menu with your role and **Log out**, so a stray click on your own name can no longer sign you out. The **Connect a phone** QR code left the top bar for **Settings → Server**, where the rest of the "how is this reachable" options live |

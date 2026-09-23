@@ -2627,7 +2627,25 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.21.3'
+const APP_VERSION = '2.21.4'
+
+// ── Service worker ───────────────────────────────────────────────────────────
+//
+// Registered only so Chrome will treat PhotoShare as installable, which is what
+// the Android share target needs — see serviceWorkerHandler in main.go. The
+// worker itself does nothing.
+//
+// navigator.serviceWorker only exists in a secure context, so on a plain-HTTP
+// LAN deployment this is simply absent. That is not an error worth reporting:
+// the app works identically without it, it just cannot be installed.
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    // updateViaCache:'none' stops the browser serving the worker script from
+    // its HTTP cache, so a new build is picked up rather than pinned.
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .catch(() => {}) // insecure origin, or the user blocks workers — harmless
+  })
+}
 
 // ── Theme (client-only preference: 'dark' | 'light' | 'auto') ─────────────────
 function prefersDark() {

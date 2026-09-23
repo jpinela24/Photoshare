@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.21.3"
+const appVersion = "2.21.4"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1961,6 +1961,38 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"uploaded": uploaded, "errors": errs})
+}
+
+// GET /sw.js — the service worker.
+//
+// Deliberately inert. PhotoShare has no use for offline caching — the library
+// lives on the LAN and streams video — and a caching worker would be actively
+// harmful here: it answers before the network is consulted, so a deploy would
+// leave the app pinned to old JavaScript that an ordinary refresh cannot clear.
+//
+// It exists because Chrome gates PWA installability on a registered worker with
+// a fetch handler, and installability is what the Android share target needs.
+// The fetch listener therefore never calls respondWith(), which leaves every
+// request to the browser exactly as if no worker were present — including the
+// range requests video playback depends on.
+//
+// skipWaiting + clients.claim mean a new worker takes over immediately instead
+// of waiting for every tab to close, so this can never be the thing pinning
+// someone to an old build.
+const serviceWorkerJS = `// PhotoShare service worker — intentionally does nothing.
+// See the comment on serviceWorkerHandler in main.go for why this is inert.
+self.addEventListener('install',  () => self.skipWaiting())
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()))
+self.addEventListener('fetch',    () => { /* pass through: no respondWith */ })
+`
+
+func serviceWorkerHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	// Revalidate every time so a new build's worker is picked up, without
+	// "no-store" — that is stricter than needed here and some browsers refuse
+	// to register a worker whose script says it must never be stored.
+	w.Header().Set("Cache-Control", "no-cache")
+	io.WriteString(w, serviceWorkerJS)
 }
 
 // GET /manifest.json — PWA web app manifest
@@ -4522,6 +4554,7 @@ func main() {
 
 	// ── Open / public (PWA assets + setup helper) ──
 	mux.HandleFunc("/manifest.json", manifestHandler)
+	mux.HandleFunc("/sw.js", serviceWorkerHandler)
 	mux.HandleFunc("/share-target", shareTargetHandler)
 	mux.HandleFunc("/icon-192.png", func(w http.ResponseWriter, r *http.Request) { servePWAIcon(w, 192) })
 	mux.HandleFunc("/icon-512.png", func(w http.ResponseWriter, r *http.Request) { servePWAIcon(w, 512) })
