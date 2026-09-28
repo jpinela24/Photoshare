@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -165,6 +166,21 @@ type detectedFace struct {
 	Emb   []float32 `json:"embedding"`
 }
 
+// sidecarError is a reply from a sidecar that is up and working — it looked at
+// this file and refused it. That is a completely different thing from the
+// sidecar being unreachable, and conflating the two is what made one
+// unsupported format look like an outage.
+type sidecarError struct {
+	Status int
+	Msg    string
+}
+
+func (e *sidecarError) Error() string { return fmt.Sprintf("sidecar %d: %s", e.Status, e.Msg) }
+
+// fatal reports whether this reply means every other file will fail too.
+// 501 is "no face model installed"; everything else is about this one file.
+func (e *sidecarError) fatal() bool { return e.Status == http.StatusNotImplemented }
+
 // detectFaces sends one image to the ML sidecar.
 func detectFaces(mlURL, full string) ([]detectedFace, error) {
 	f, err := os.Open(full)
@@ -199,7 +215,7 @@ func detectFaces(mlURL, full string) ([]detectedFace, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 400))
-		return nil, fmt.Errorf("sidecar %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, &sidecarError{Status: resp.StatusCode, Msg: strings.TrimSpace(string(msg))}
 	}
 	var out struct {
 		Faces []detectedFace `json:"faces"`
@@ -273,6 +289,7 @@ func faceIndexer(mlURL string) {
 		return
 	}
 	log.Printf("[FACES] scanning %d new photo(s)", len(todo))
+	rejected, unreachable := 0, 0
 
 	for _, p := range todo {
 		found, err := detectFaces(mlURL, p)
@@ -280,15 +297,39 @@ func faceIndexer(mlURL string) {
 			faceIndex.mu.Lock()
 			faceIndex.errors++
 			faceIndex.mu.Unlock()
+
+			// Distinguish "this file was refused" from "the sidecar is gone".
+			// A rejected file is normal — an unreadable photo, or a format the
+			// sidecar can't decode — and the scan must carry on past it.
+			// Treating the two the same aborted whole runs over one bad format.
+			var se *sidecarError
+			if errors.As(err, &se) {
+				if se.fatal() {
+					log.Printf("[FACES] stopping: %v", err)
+					return
+				}
+				rejected++
+				// Don't print the same complaint thousands of times; the count
+				// is reported at the end.
+				if rejected <= 10 {
+					log.Printf("[FACES] skipped %s: %v", filepath.Base(p), err)
+				} else if rejected == 11 {
+					log.Printf("[FACES] …further skipped files will be counted, not listed")
+				}
+				continue
+			}
+
+			// Anything else is transport: connection refused, timeout, a reply
+			// that isn't JSON. Those do mean the sidecar is unreachable.
+			unreachable++
 			log.Printf("[FACES] %s: %v", filepath.Base(p), err)
-			// A sidecar that is down or lacks the model will fail for every
-			// file; stop rather than log 15,000 identical errors.
-			if faceIndex.errors > 20 && faceIndex.done == 0 {
-				log.Printf("[FACES] giving up — the sidecar is not answering")
+			if unreachable >= 10 {
+				log.Printf("[FACES] giving up — the sidecar is unreachable after %d attempts", unreachable)
 				return
 			}
 			continue
 		}
+		unreachable = 0 // a success means it is alive; only a run of failures counts
 		rel, _ := filepath.Rel(baseDir, p)
 		rel = filepath.ToSlash(rel)
 		info, statErr := os.Stat(p)
@@ -343,8 +384,12 @@ func faceIndexer(mlURL string) {
 	clusterFaces()
 
 	faceIndex.mu.Lock()
-	log.Printf("[FACES] done — %d scanned, %d errors", faceIndex.done, faceIndex.errors)
+	done := faceIndex.done
 	faceIndex.mu.Unlock()
+	log.Printf("[FACES] done — %d scanned, %d skipped", done, rejected)
+	if rejected > 0 {
+		log.Printf("[FACES] %d file(s) the sidecar could not read — usually an unsupported format", rejected)
+	}
 }
 
 // renameFacePath follows a photo that moved.

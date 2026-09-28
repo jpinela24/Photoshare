@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.27.0** · Linux / Docker · Windows
+**Current version: v2.27.1** · Linux / Docker · Windows
 
 ---
 
@@ -236,6 +236,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.27.1** | **Face scanning handles HEIC, and no longer aborts on one bad format** — the sidecar could not open iPhone HEIC photos at all, which on a phone library is most of them. Worse, the scan treated a run of rejected files as "the sidecar is not answering" and gave up on the whole library — so one unsupported format stopped everything and reported the wrong cause. Rejections are now told apart from an unreachable sidecar: the scan skips the file and carries on, and only a missing face model or a genuinely dead sidecar stops it |
 | **2.27.0** | **Audit and correct individual faces** — opening a person now shows large crops with the photo and date each came from, so you can actually tell whether a face belongs. Select faces and **move them to another person** (or a new one) — previously the only per-face action was "remove", which pushes a face out but can't put it right, so the next scan was free to put it back. Hand assignments are permanent, like naming and merging |
 | **2.26.3** | **Giving two groups the same name offers to merge them** — naming one group "Alex" and another "Alex" used to leave two separate people sharing a name, which is the obvious thing to try when one person is split across ages. It now asks whether to merge, rather than merging silently: families reuse names, and an accidental merge is tedious to unpick. Case and stray spaces count as the same name |
 | **2.26.2** | **Faces follow moved and deleted photos** — face records are keyed by path, and moving a photo or folder updated thumbnails and favorites but not faces. That left face crops pointing at nothing **and** made the photo look unscanned, so the next pass detected it again and the person gained a duplicate. Moves, renames and folder moves now carry faces; trashing a photo drops them; and anything removed outside the app is pruned on the next scan |

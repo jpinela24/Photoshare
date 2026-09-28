@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -796,5 +799,65 @@ func TestStaleRecordsFromOldMovesArePrunedNotDuplicated(t *testing.T) {
 		if n > 1 {
 			t.Errorf("%s appears %d times in the group — the move produced a duplicate", p, n)
 		}
+	}
+}
+
+// A reply from a working sidecar that refused one file must not be mistaken
+// for the sidecar being down. Conflating the two aborted an entire 12,000-photo
+// run because HEIC was unsupported — and reported it as "the sidecar is not
+// answering", which sent the diagnosis in completely the wrong direction.
+func TestSidecarErrorClassification(t *testing.T) {
+	cases := []struct {
+		status int
+		fatal  bool
+		why    string
+	}{
+		{http.StatusBadRequest, false, "one unreadable or unsupported file"},
+		{http.StatusInternalServerError, false, "one file the sidecar choked on"},
+		{http.StatusNotImplemented, true, "no face model — every file will fail"},
+	}
+	for _, c := range cases {
+		e := &sidecarError{Status: c.status, Msg: "x"}
+		if got := e.fatal(); got != c.fatal {
+			t.Errorf("status %d: fatal = %v, want %v (%s)", c.status, got, c.fatal, c.why)
+		}
+		// It must survive wrapping, since that is how the indexer inspects it.
+		var se *sidecarError
+		if !errors.As(fmt.Errorf("wrapped: %w", e), &se) {
+			t.Errorf("status %d: a wrapped sidecarError was not recognised", c.status)
+		}
+	}
+}
+
+// detectFaces has to return a sidecarError for an HTTP rejection, and a plain
+// error when the sidecar cannot be reached at all — the indexer's decision to
+// keep going or stop rests entirely on that difference.
+func TestDetectFacesDistinguishesRejectionFromOutage(t *testing.T) {
+	photo := filepath.Join(t.TempDir(), "p.jpg")
+	if err := os.WriteFile(photo, []byte("not really a jpeg"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sidecar that is up and refuses the file.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"detail":"bad image"}`))
+	}))
+	defer srv.Close()
+
+	_, err := detectFaces(srv.URL, photo)
+	var se *sidecarError
+	if !errors.As(err, &se) {
+		t.Fatalf("a 400 gave %T (%v), want *sidecarError", err, err)
+	}
+	if se.fatal() {
+		t.Error("a rejected file was treated as fatal — the scan would abort")
+	}
+
+	// A sidecar that isn't there.
+	if _, err := detectFaces("http://127.0.0.1:1", photo); err == nil {
+		t.Error("an unreachable sidecar returned no error")
+	} else if errors.As(err, &se) {
+		t.Error("an unreachable sidecar was reported as a per-file rejection — the scan would never give up")
 	}
 }

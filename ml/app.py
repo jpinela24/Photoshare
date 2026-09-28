@@ -16,6 +16,18 @@ import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 from PIL import Image, ImageOps
+
+# iPhone photos are HEIC, and Pillow cannot open them unaided -- on a phone
+# library that is the majority of the collection, so without this face
+# detection silently skips most of it.
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    _heic = True
+except Exception as _e:  # noqa: BLE001
+    print(f"[faces] HEIC support unavailable: {_e}", flush=True)
+    _heic = False
 from sentence_transformers import SentenceTransformer
 
 # clip-ViT-B-32 encodes BOTH images and text into the same 512-dim space.
@@ -66,7 +78,7 @@ app = FastAPI(title="PhotoShare ML")
 
 @app.get("/health")
 def health():
-    return {"ok": True, "faces": _face_app is not None}
+    return {"ok": True, "faces": _face_app is not None, "heic": _heic}
 
 
 @app.post("/clip/image")
