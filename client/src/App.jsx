@@ -996,6 +996,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
         <div className="sidebar-views">
           <button className={`util-btn ${currentPath === TIMELINE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TIMELINE_PATH)}><CalendarIcon size={14} /> Timeline</button>
           <button className={`util-btn ${currentPath === FAVORITES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(FAVORITES_PATH)}><StarIcon size={14} /> Favorites</button>
+          <button className={`util-btn ${currentPath === PEOPLE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(PEOPLE_PATH)}><UserIcon size={14} /> People</button>
           <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
           <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
         </div>
@@ -1089,13 +1090,14 @@ const MEMORIES_PATH = '__memories__'
 const MAP_PATH = '__map__'
 const TIMELINE_PATH = '__timeline__'
 const FAVORITES_PATH = '__favorites__'
+const PEOPLE_PATH = '__people__'
 
 // The special views render their own content instead of a folder listing, so
 // the grid, toolbar, drag-drop and browse fetch all sit them out. One predicate
 // rather than a chain repeated at each site — that chain had to be edited in
 // five places every time a view was added, which is how a view ends up half
 // wired in.
-const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH, FAVORITES_PATH]
+const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH, FAVORITES_PATH, PEOPLE_PATH]
 const isSpecialPath = (p) => SPECIAL_PATHS.includes(p)
 
 // ── MapView (geotagged photos on a map) ────────────────────────────────────────
@@ -1346,6 +1348,203 @@ function TimelineView({ onOpen, onItems }) {
           </nav>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── PeopleView ────────────────────────────────────────────────────────────────
+//
+// Face groups, and the tools to correct them. The design assumption throughout
+// is that the grouping is a first draft: ArcFace similarity falls a long way
+// across a big age gap, so one person legitimately produces several groups.
+// Merging is therefore the primary action, not an edge case.
+
+function PeopleView({ onOpen }) {
+  const { token } = useContext(AdminCtx)
+  const [people, setPeople]   = useState(null)
+  const [status, setStatus]   = useState(null)
+  const [openId, setOpenId]   = useState(null)   // group being inspected
+  const [groupFaces, setGroupFaces] = useState([])
+  const [picked, setPicked]   = useState(() => new Set()) // groups picked to merge
+  const [selFaces, setSelFaces] = useState(() => new Set())
+  const [naming, setNaming]   = useState(null)
+  const [nameText, setNameText] = useState('')
+
+  const loadPeople = () =>
+    fetch('/api/people', { credentials: 'same-origin' })
+      .then(r => r.json()).then(d => setPeople(d.people || [])).catch(() => setPeople([]))
+
+  const loadStatus = () =>
+    fetch('/api/faces/status', { credentials: 'same-origin' })
+      .then(r => r.json()).then(setStatus).catch(() => {})
+
+  useEffect(() => { loadPeople(); loadStatus() }, [])
+  // Poll only while a scan is running, so the view is quiet at rest.
+  useEffect(() => {
+    if (!status?.running) return
+    const iv = setInterval(() => { loadStatus(); loadPeople() }, 4000)
+    return () => clearInterval(iv)
+  }, [status?.running])
+
+  useEffect(() => {
+    if (!openId) { setGroupFaces([]); setSelFaces(new Set()); return }
+    fetch(`/api/people/faces?id=${encodeURIComponent(openId)}`, { credentials: 'same-origin' })
+      .then(r => r.json()).then(d => setGroupFaces(d.faces || [])).catch(() => setGroupFaces([]))
+  }, [openId])
+
+  const post = async (url, body) => {
+    const r = await adminFetch(url, token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    await loadPeople()
+    return r.ok
+  }
+
+  const saveName = async (id) => {
+    await post('/api/people/name', { id, name: nameText })
+    setNaming(null); setNameText('')
+    // Naming moves the group to a stable id, so the open panel is stale.
+    if (openId === id) setOpenId(null)
+  }
+
+  const mergePicked = async () => {
+    const ids = [...picked]
+    if (ids.length < 2) return
+    // Named groups first, so the merged person keeps a name the user chose.
+    ids.sort((a, b) => (people.find(p => p.id === b)?.named ? 1 : 0) - (people.find(p => p.id === a)?.named ? 1 : 0))
+    await post('/api/people/merge', { ids })
+    setPicked(new Set()); setOpenId(null)
+  }
+
+  const detach = async () => {
+    if (!selFaces.size) return
+    await post('/api/people/detach', { faceIds: [...selFaces] })
+    setSelFaces(new Set())
+    const id = openId; setOpenId(null); setTimeout(() => setOpenId(id), 50)
+  }
+
+  const rescan = async () => {
+    await adminFetch('/api/faces/scan', token, { method: 'POST' })
+    setTimeout(loadStatus, 800)
+  }
+
+  const yearOf = (unix) => unix ? new Date(unix * 1000).getFullYear() : null
+  const span = (p) => {
+    const a = yearOf(p.from), b = yearOf(p.to)
+    if (!a) return null
+    return a === b ? `${a}` : `${a}–${b}`
+  }
+
+  if (status && !status.enabled) return (
+    <div className="status muted">
+      Face grouping needs the ML sidecar. Set <code>ML_URL</code> in docker-compose.yml and rebuild it.
+    </div>
+  )
+  if (!people) return <div className="status"><div className="spinner" /><span>Loading…</span></div>
+
+  return (
+    <div className="memories-view">
+      <div className="memories-head">
+        <h2 className="trash-title"><UserIcon size={18} /> People</h2>
+        <span className="memories-sub">
+          {status?.running
+            ? `Scanning photos for faces… ${status.done?.toLocaleString?.() ?? 0} of ${status.total?.toLocaleString?.() ?? 0}`
+            : `${people.length} group${people.length === 1 ? '' : 's'} from ${(status?.faces || 0).toLocaleString()} face${status?.faces === 1 ? '' : 's'}`}
+        </span>
+        {token && !status?.running && (
+          <button className="trash-select-btn" onClick={rescan}>Scan for new faces</button>
+        )}
+      </div>
+
+      {!people.length && !status?.running && (
+        <div className="status muted">
+          No groups yet. {status?.scanned ? 'Nothing was grouped — faces need to appear in at least ' + (status.minGroup || 3) + ' photos.' : 'Run a scan to get started.'}
+        </div>
+      )}
+
+      {/* Groups. Tick two or more and merge them — that is how one person's
+          different ages become a single person. */}
+      <div className="people-grid">
+        {people.map(p => (
+          <div key={p.id} className={`person-card ${picked.has(p.id) ? 'person-picked' : ''}`}>
+            <button className="person-cover" onClick={() => setOpenId(openId === p.id ? null : p.id)} title={`${p.count} photos`}>
+              <img src={`/api/faces/crop?id=${encodeURIComponent(p.cover)}`} alt="" loading="lazy" />
+            </button>
+            <div className="person-meta">
+              {naming === p.id ? (
+                <input
+                  className="adm-input person-name-input"
+                  autoFocus
+                  value={nameText}
+                  placeholder="Name"
+                  onChange={e => setNameText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveName(p.id); if (e.key === 'Escape') setNaming(null) }}
+                  onBlur={() => saveName(p.id)}
+                />
+              ) : (
+                <button
+                  className={`person-name ${p.named ? '' : 'person-unnamed'}`}
+                  onClick={() => { if (!token) return; setNaming(p.id); setNameText(p.name || '') }}
+                  title={token ? 'Name this person' : undefined}
+                >{p.name || 'Add name'}</button>
+              )}
+              <span className="person-count">{p.count} photo{p.count === 1 ? '' : 's'}{span(p) ? ` · ${span(p)}` : ''}</span>
+            </div>
+            {token && (
+              <label className="person-pick" title="Pick to merge">
+                <input
+                  type="checkbox"
+                  checked={picked.has(p.id)}
+                  onChange={() => setPicked(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n })}
+                />
+              </label>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {picked.size > 0 && (
+        <div className="trash-selbar">
+          <button className="sel-bar-close" onClick={() => setPicked(new Set())} title="Clear"><CloseIcon size={14} /></button>
+          <span className="sel-bar-count">{picked.size} group{picked.size === 1 ? '' : 's'} picked</span>
+          <button className="sel-bar-action" disabled={picked.size < 2} onClick={mergePicked}>
+            Merge into one person
+          </button>
+        </div>
+      )}
+
+      {/* One group's photos, with a way to say "that isn't them". */}
+      {openId && (
+        <div className="person-detail">
+          <div className="memories-head">
+            <h3 className="trash-title">{people.find(p => p.id === openId)?.name || 'Unnamed group'}</h3>
+            <span className="memories-sub">{groupFaces.length} photo{groupFaces.length === 1 ? '' : 's'}</span>
+            {token && selFaces.size > 0 && (
+              <button className="trash-select-btn" onClick={detach}>Remove {selFaces.size} from this person</button>
+            )}
+            <button className="trash-select-btn" onClick={() => setOpenId(null)}>Close</button>
+          </div>
+          <div className="memories-grid">
+            {groupFaces.map(f => (
+              <div key={f.id} className={`face-cell ${selFaces.has(f.id) ? 'face-cell-sel' : ''}`}>
+                <button className="memories-cell" title={f.path}
+                  onClick={() => onOpen({ name: f.name, path: f.path, isVideo: false })}>
+                  <img src={`/api/faces/crop?id=${encodeURIComponent(f.id)}`} alt="" loading="lazy" />
+                </button>
+                {token && (
+                  <label className="face-pick" title="Not this person">
+                    <input
+                      type="checkbox"
+                      checked={selFaces.has(f.id)}
+                      onChange={() => setSelFaces(prev => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n })}
+                    />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -2872,7 +3071,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.25.0'
+const APP_VERSION = '2.26.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3930,6 +4129,7 @@ export default function App() {
           {path === MAP_PATH && <MapView onOpen={setSelected} onItems={setViewMedia} />}
           {path === TIMELINE_PATH && <TimelineView onOpen={setSelected} onItems={setViewMedia} />}
           {path === FAVORITES_PATH && <FavoritesView onOpen={setSelected} onItems={setViewMedia} version={favVersion} />}
+          {path === PEOPLE_PATH && <PeopleView onOpen={setSelected} />}
           {isSpecialPath(path) ? null : folderDupes ? (
             <DuplicatesView
               scopePath={path}

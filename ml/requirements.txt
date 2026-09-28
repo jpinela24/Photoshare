@@ -5,3 +5,9 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pillow>=10
 python-multipart>=0.0.9
+
+# Faces: insightface (SCRFD detector + ArcFace embeddings) on onnxruntime CPU.
+# Optional at runtime -- app.py degrades to CLIP-only if these are missing.
+insightface>=0.7.3
+onnxruntime>=1.17
+numpy<2

@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.25.0** · Linux / Docker · Windows
+**Current version: v2.26.0** · Linux / Docker · Windows
 
 ---
 
@@ -32,6 +32,7 @@ tray icon and a native window (Windows).
 
 ### Find
 - **Search** by name with **type** (photo/video) and **date** filters.
+- **People (faces)** — groups faces locally with insightface. Deliberately groups *tightly*: one person shows up as several groups (a child at different ages is genuinely hard for any model), and you **merge** them into one person. Naming and merging are permanent — re-scans never undo them — and "that isn't them" removes a face. Optional; needs the ML sidecar.
 - **Smart (AI) search** — find photos by what they show ("beach at sunset"), powered by local CLIP. Optional, fully private, off unless the ML sidecar is enabled.
 - **Duplicate finder** — finds **exact** copies (content-hash) *and* **similar photos** (perceptual hash: the same picture saved at a different size or quality). Parallel + cached, so re-scans are near-instant; recommends which copy to keep and cleans up the rest in one click.
 - **Storage stats** — library size, counts, and real disk usage.
@@ -235,6 +236,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.26.0** | **People — face grouping that you correct** — face detection and grouping return, replacing what was removed in 2.10.2 for auto-labelling with no way to fix it. Detection is SCRFD + ArcFace (insightface) in the local ML sidecar; nothing leaves the box. The design point: **a person owns several groups**. ArcFace similarity falls a long way across a big age gap — a face changes more between one and five than an adult's does in thirty years — so any threshold loose enough to match a baby to their school photos would merge strangers. Grouping is therefore deliberately tight, and you **merge** a person's groups once; afterwards new photos match against *all* of that person's faces, which is what makes ages work. Naming and merging are permanent — re-scanning never undoes them — and faces can be removed from a group. Optional: without `ML_URL` the view says so and nothing else changes |
 | **2.25.0** | **Move folders, not just files** — in select mode, clicking a folder picks it instead of opening it, so folders can go through **Move** like anything else. Moving a folder into itself or its own subtree is refused with a clear message rather than left to the filesystem, cached thumbnails for the whole subtree are cleared, and **stars inside a moved folder follow it**. Copy stays disabled for folders (it would need a recursive copy the server doesn't do) — move them instead |
 | **2.24.1** | **The type filter sticks** — All / Photos / Videos reset to All on every navigation, so it had to be re-applied in each folder. It is now remembered across folders and across reloads, like tile size. A folder whose contents the filter hides now says so and offers **Show all**, instead of looking like an empty folder |
 | **2.24.0** | **Filter chips move into the top bar** — **All / Photos / Videos** now sit beside the sort control instead of above the grid, and the search field gives up most of its width to make room. Search keeps a usable minimum so it can't collapse to just the magnifier, and the Upload button drops its label below 1150px. On phones the chips stay above the grid: the top bar is held to two rows there and cannot fit chips, search and the tools at once |

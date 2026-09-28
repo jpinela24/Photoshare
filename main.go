@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.25.0"
+const appVersion = "2.26.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -4706,6 +4706,16 @@ func main() {
 	mux.HandleFunc("/api/qr", protected(getOnly(qrHandler)))
 	mux.HandleFunc("/api/on-this-day", protected(getOnly(onThisDayHandler)))
 	mux.HandleFunc("/api/timeline", protected(getOnly(timelineHandler)))
+	// People (face grouping). Reads need a session; anything that changes a
+	// grouping is admin-only and goes through the POST + CSRF middleware.
+	mux.HandleFunc("/api/faces/status", protected(getOnly(facesStatusHandler)))
+	mux.HandleFunc("/api/faces/crop", protected(getOnly(faceCropHandler)))
+	mux.HandleFunc("/api/people", protected(getOnly(peopleListHandler)))
+	mux.HandleFunc("/api/people/faces", protected(getOnly(peopleFacesHandler)))
+	mux.HandleFunc("/api/faces/scan", withCORS(mutate(http.MethodPost, facesScanHandler)))
+	mux.HandleFunc("/api/people/name", withCORS(mutate(http.MethodPost, peopleNameHandler)))
+	mux.HandleFunc("/api/people/merge", withCORS(mutate(http.MethodPost, peopleMergeHandler)))
+	mux.HandleFunc("/api/people/detach", withCORS(mutate(http.MethodPost, peopleDetachHandler)))
 	mux.HandleFunc("/api/favorites", protected(func(w http.ResponseWriter, r *http.Request) {
 		// One path, two verbs: GET reads the list, POST toggles one entry. The
 		// POST goes through mutate() for the method + CSRF checks.
@@ -4857,6 +4867,16 @@ func main() {
 
 	// Build the "On This Day" date index in the background
 	go dateIndexer()
+
+	// Face indexing, only when the ML sidecar is configured. Deliberately last
+	// and deliberately delayed: it is the most expensive background pass and
+	// the least urgent, so thumbnails and the date index get the CPU first.
+	if ml := faceMLURL(); ml != "" {
+		go func() {
+			time.Sleep(90 * time.Second)
+			faceIndexer(ml)
+		}()
+	}
 
 	// AI semantic search — starts a background embedder only if ML_URL is set.
 	aiInit()
