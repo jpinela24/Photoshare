@@ -1435,9 +1435,19 @@ function PeopleView({ onOpen }) {
     return a === b ? `${a}` : `${a}–${b}`
   }
 
-  if (status && !status.enabled) return (
+  // Two different problems, two different fixes — saying "needs the ML sidecar"
+  // when the sidecar is up and only the face model is missing sends you looking
+  // in the wrong place.
+  if (status && !status.configured) return (
     <div className="status muted">
       Face grouping needs the ML sidecar. Set <code>ML_URL</code> in docker-compose.yml and rebuild it.
+    </div>
+  )
+  if (status && !status.enabled) return (
+    <div className="status muted">
+      The ML sidecar is running but has no face model — smart search still works.
+      Rebuild it with <code>docker compose build photoshare-ml</code> and check its
+      log for <code>[faces] unavailable</code>.
     </div>
   )
   if (!people) return <div className="status"><div className="spinner" /><span>Loading…</span></div>
@@ -3071,7 +3081,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.26.0'
+const APP_VERSION = '2.26.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

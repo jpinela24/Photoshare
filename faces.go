@@ -656,15 +656,20 @@ func facesStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"enabled":  faceMLURL() != "",
-		"running":  running,
-		"done":     done,
-		"total":    total,
-		"errors":   errs,
-		"faces":    nFaces,
-		"scanned":  nSeen,
-		"people":   len(listPeople()),
-		"minGroup": faceMinClusterSize,
+		// configured: an ML sidecar is set up at all.
+		// enabled: that sidecar actually has the face model loaded. The two
+		// differ when the sidecar is up for CLIP but faces are unavailable,
+		// which needs a different message than "not configured".
+		"configured": faceMLURL() != "",
+		"enabled":    sidecarHasFaces(),
+		"running":    running,
+		"done":       done,
+		"total":      total,
+		"errors":     errs,
+		"faces":      nFaces,
+		"scanned":    nSeen,
+		"people":     len(listPeople()),
+		"minGroup":   faceMinClusterSize,
 	})
 }
 
@@ -797,7 +802,11 @@ func facesScanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	ml := faceMLURL()
 	if ml == "" {
-		http.Error(w, "face detection is not configured", http.StatusNotImplemented)
+		http.Error(w, "no ML sidecar configured (set ML_URL)", http.StatusNotImplemented)
+		return
+	}
+	if !sidecarHasFaces() {
+		http.Error(w, "the ML sidecar is running but has no face model", http.StatusNotImplemented)
 		return
 	}
 	go faceIndexer(ml)
@@ -805,3 +814,46 @@ func facesScanHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func faceMLURL() string { return strings.TrimSpace(os.Getenv("ML_URL")) }
+
+// sidecarHasFaces asks the sidecar whether the face model actually loaded.
+//
+// ML_URL being set only means a sidecar was configured. It can be running and
+// serving CLIP while the face model is missing — if its download failed at
+// build time, say. Without this the People view would sit empty with no
+// explanation, which is the most confusing possible failure.
+//
+// Cached briefly: this is on the status path, which the UI polls.
+var faceHealth struct {
+	mu      sync.Mutex
+	ok      bool
+	checked time.Time
+}
+
+func sidecarHasFaces() bool {
+	ml := faceMLURL()
+	if ml == "" {
+		return false
+	}
+	faceHealth.mu.Lock()
+	defer faceHealth.mu.Unlock()
+	if time.Since(faceHealth.checked) < 30*time.Second {
+		return faceHealth.ok
+	}
+	faceHealth.checked = time.Now()
+	faceHealth.ok = false
+
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(strings.TrimRight(ml, "/") + "/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var h struct {
+		Faces bool `json:"faces"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&h) != nil {
+		return false
+	}
+	faceHealth.ok = h.Faces
+	return h.Faces
+}

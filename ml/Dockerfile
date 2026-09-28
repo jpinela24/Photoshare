@@ -3,9 +3,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# insightface compiles a small C extension during pip install, so the compiler
-# has to be present before requirements are installed -- not after.
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+# build-essential: insightface compiles a small C extension during pip install,
+# so the compiler must be present before requirements are installed -- not after.
+#
+# libgl1 + libglib2.0-0: RUNTIME requirements, not build ones. insightface
+# imports OpenCV, which links libGL even in a headless container, and
+# python:slim ships neither. Without them the very first `import cv2` dies with
+# "ImportError: libGL.so.1: cannot open shared object file" -- at model load,
+# long after pip reported success.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # CPU-only torch first (avoids the multi-GB CUDA wheel), then the rest.
