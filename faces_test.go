@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -300,4 +301,213 @@ func TestSyntheticIdentitiesAreSeparable(t *testing.T) {
 		t.Errorf("different identities similarity %.3f reaches the %.2f threshold", diff, faceSameThreshold)
 	}
 	t.Logf("same=%.3f different=%.3f threshold=%.2f", same, diff, faceSameThreshold)
+}
+
+// Faces are keyed by path in three places — the id, Face.Path and the Seen
+// record — so a move has to carry all three. Missing any one leaves broken
+// crops, or makes the photo look unscanned so it is detected again and the
+// person gains a duplicate.
+func TestFacePathFollowsAMove(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(11))
+	addFace("old/a.jpg#0", personVec(rng, 20, 0.02), 0)
+	faceMu.Lock()
+	faces.Faces["old/a.jpg#0"].Path = "old/a.jpg"
+	faces.Seen["old/a.jpg"] = faceSeen{Size: 1, ModNs: 2, Faces: 1}
+	faceMu.Unlock()
+
+	renameFacePath("old/a.jpg", "new/a.jpg")
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if _, stale := faces.Faces["old/a.jpg#0"]; stale {
+		t.Error("the face is still under its old id")
+	}
+	fc := faces.Faces["new/a.jpg#0"]
+	if fc == nil {
+		t.Fatalf("no face at the new id; have %v", keysOf(faces.Faces))
+	}
+	if fc.Path != "new/a.jpg" {
+		t.Errorf("Path = %q, want new/a.jpg — the crop would 404", fc.Path)
+	}
+	if _, ok := faces.Seen["new/a.jpg"]; !ok {
+		t.Error("Seen was not re-keyed — the photo would be scanned again and duplicated")
+	}
+	if _, ok := faces.Seen["old/a.jpg"]; ok {
+		t.Error("the old Seen entry is still there")
+	}
+}
+
+// A folder move carries every photo underneath it, and nothing else.
+func TestFacePrefixFollowsAFolderMove(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(12))
+	set := func(id, path string) {
+		addFace(id, personVec(rng, 21, 0.02), 0)
+		faceMu.Lock()
+		faces.Faces[id].Path = path
+		faces.Seen[path] = faceSeen{Size: 1, ModNs: 2, Faces: 1}
+		faceMu.Unlock()
+	}
+	set("Trip/a.jpg#0", "Trip/a.jpg")
+	set("Trip/Inner/b.jpg#0", "Trip/Inner/b.jpg")
+	set("Trips-other/c.jpg#0", "Trips-other/c.jpg") // shared name prefix: must not move
+
+	renameFacePrefix("Trip", "Dest/Trip")
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	for _, want := range []string{"Dest/Trip/a.jpg#0", "Dest/Trip/Inner/b.jpg#0"} {
+		if faces.Faces[want] == nil {
+			t.Errorf("missing %s after the folder move; have %v", want, keysOf(faces.Faces))
+		}
+	}
+	if faces.Faces["Trips-other/c.jpg#0"] == nil {
+		t.Error("a sibling whose name merely starts with Trip was moved too")
+	}
+	if _, ok := faces.Seen["Dest/Trip/Inner/b.jpg"]; !ok {
+		t.Error("a nested Seen entry was not re-keyed")
+	}
+}
+
+// A deleted photo must not leave its faces sitting in a person's group.
+func TestForgetFacesOnDelete(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(13))
+	addFace("gone.jpg#0", personVec(rng, 22, 0.02), 0)
+	addFace("kept.jpg#0", personVec(rng, 22, 0.02), 0)
+	faceMu.Lock()
+	faces.Faces["gone.jpg#0"].Path = "gone.jpg"
+	faces.Faces["kept.jpg#0"].Path = "kept.jpg"
+	faces.Seen["gone.jpg"] = faceSeen{}
+	faceMu.Unlock()
+
+	forgetFaces("gone.jpg")
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if faces.Faces["gone.jpg#0"] != nil {
+		t.Error("the deleted photo's face is still in the index")
+	}
+	if _, ok := faces.Seen["gone.jpg"]; ok {
+		t.Error("the deleted photo is still marked as scanned")
+	}
+	if faces.Faces["kept.jpg#0"] == nil {
+		t.Error("an unrelated photo's face was removed")
+	}
+}
+
+// Files removed outside the app (over SMB, say) still have to be cleaned up.
+func TestPruneMissingFaces(t *testing.T) {
+	faceTestEnv(t)
+	lib := t.TempDir()
+	prevBase := baseDir
+	baseDir = lib
+	rootMu.Lock()
+	rootCacheBase, rootCacheReal = "", ""
+	rootMu.Unlock()
+	t.Cleanup(func() {
+		baseDir = prevBase
+		rootMu.Lock()
+		rootCacheBase, rootCacheReal = "", ""
+		rootMu.Unlock()
+	})
+	if err := os.WriteFile(filepath.Join(lib, "here.jpg"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rng := rand.New(rand.NewSource(14))
+	addFace("here.jpg#0", personVec(rng, 23, 0.02), 0)
+	addFace("vanished.jpg#0", personVec(rng, 23, 0.02), 0)
+	faceMu.Lock()
+	faces.Faces["here.jpg#0"].Path = "here.jpg"
+	faces.Faces["vanished.jpg#0"].Path = "vanished.jpg"
+	faceMu.Unlock()
+
+	if n := pruneMissingFaces(); n != 1 {
+		t.Errorf("pruned %d, want 1", n)
+	}
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if faces.Faces["vanished.jpg#0"] != nil {
+		t.Error("a face whose photo is gone survived the prune")
+	}
+	if faces.Faces["here.jpg#0"] == nil {
+		t.Error("the prune removed a face whose photo is still there")
+	}
+}
+
+func keysOf(m map[string]*Face) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// Through the real handler, not the helper: this is what catches a move site
+// that forgot to tell the face index. The unit tests above pass whether or not
+// adminBatchMoveHandler actually calls them.
+func TestBatchMoveHandlerCarriesFaces(t *testing.T) {
+	withUsers(t, nil)
+	lib := favEnv(t) // temp library + isolated favorites
+	faceTestEnv(t)
+	mkPhoto(t, lib, "Album/a.jpg")
+	if err := os.MkdirAll(filepath.Join(lib, "Dest"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rng := rand.New(rand.NewSource(21))
+	addFace("Album/a.jpg#0", personVec(rng, 30, 0.02), 0)
+	faceMu.Lock()
+	faces.Faces["Album/a.jpg#0"].Path = "Album/a.jpg"
+	faces.Seen["Album/a.jpg"] = faceSeen{Size: 5, ModNs: 7, Faces: 1}
+	faceMu.Unlock()
+
+	if _, out := moveBatch(t, `{"paths":["Album/a.jpg"],"destFolder":"Dest"}`); errorsOf(out) != "" {
+		t.Fatalf("move failed: %s", errorsOf(out))
+	}
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if faces.Faces["Dest/a.jpg#0"] == nil {
+		t.Errorf("the face did not follow the move; have %v", keysOf(faces.Faces))
+	}
+	if faces.Faces["Album/a.jpg#0"] != nil {
+		t.Error("the face is still recorded at the old path — its crop would 404")
+	}
+	if _, ok := faces.Seen["Dest/a.jpg"]; !ok {
+		t.Error("Seen was not re-keyed: the photo would be re-detected and the person would gain a duplicate")
+	}
+}
+
+// Same, for a folder move.
+func TestBatchMoveHandlerCarriesFacesForFolders(t *testing.T) {
+	withUsers(t, nil)
+	lib := favEnv(t)
+	faceTestEnv(t)
+	mkPhoto(t, lib, "Trip/Inner/b.jpg")
+	if err := os.MkdirAll(filepath.Join(lib, "Dest"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rng := rand.New(rand.NewSource(22))
+	addFace("Trip/Inner/b.jpg#0", personVec(rng, 31, 0.02), 0)
+	faceMu.Lock()
+	faces.Faces["Trip/Inner/b.jpg#0"].Path = "Trip/Inner/b.jpg"
+	faces.Seen["Trip/Inner/b.jpg"] = faceSeen{Size: 5, ModNs: 7, Faces: 1}
+	faceMu.Unlock()
+
+	if _, out := moveBatch(t, `{"paths":["Trip"],"destFolder":"Dest"}`); errorsOf(out) != "" {
+		t.Fatalf("move failed: %s", errorsOf(out))
+	}
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if faces.Faces["Dest/Trip/Inner/b.jpg#0"] == nil {
+		t.Errorf("a nested face did not follow the folder move; have %v", keysOf(faces.Faces))
+	}
+	if _, ok := faces.Seen["Dest/Trip/Inner/b.jpg"]; !ok {
+		t.Error("the nested Seen entry was not re-keyed")
+	}
 }

@@ -266,6 +266,9 @@ func faceIndexer(mlURL string) {
 	faceIndex.total = len(todo)
 	faceIndex.mu.Unlock()
 	if len(todo) == 0 {
+		if n := pruneMissingFaces(); n > 0 {
+			log.Printf("[FACES] dropped %d face(s) whose photo is gone", n)
+		}
 		clusterFaces()
 		return
 	}
@@ -331,11 +334,161 @@ func faceIndexer(mlURL string) {
 	faceMu.Lock()
 	saveFacesLocked()
 	faceMu.Unlock()
+	// Prune here rather than in clusterFaces: this pass is already reading the
+	// filesystem, and clustering is otherwise a pure operation on embeddings
+	// that has no business stat-ing 20,000 files.
+	if n := pruneMissingFaces(); n > 0 {
+		log.Printf("[FACES] dropped %d face(s) whose photo is gone", n)
+	}
 	clusterFaces()
 
 	faceIndex.mu.Lock()
 	log.Printf("[FACES] done — %d scanned, %d errors", faceIndex.done, faceIndex.errors)
 	faceIndex.mu.Unlock()
+}
+
+// renameFacePath follows a photo that moved.
+//
+// Faces are keyed by path three times over — the face id, Face.Path, and the
+// Seen record — so a move without this leaves the crops pointing at nothing AND
+// makes the photo look unscanned, so the next pass detects it again and the
+// person quietly gains a duplicate of every face in it.
+func renameFacePath(oldRel, newRel string) {
+	oldRel, newRel = filepath.ToSlash(oldRel), filepath.ToSlash(newRel)
+	if oldRel == newRel {
+		return
+	}
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+	if renameFaceLocked(oldRel, newRel) {
+		saveFacesLocked()
+	}
+}
+
+// renameFaceLocked rewrites one path. The caller must hold faceMu.
+func renameFaceLocked(oldRel, newRel string) bool {
+	changed := false
+	for id, fc := range faces.Faces {
+		if fc.Path != oldRel {
+			continue
+		}
+		delete(faces.Faces, id)
+		// The id embeds the path, so it has to be rebuilt or the crop endpoint
+		// would look the face up under a name nothing else uses.
+		idx := id[strings.LastIndex(id, "#"):]
+		fc.Path = newRel
+		fc.ID = newRel + idx
+		faces.Faces[fc.ID] = fc
+		changed = true
+	}
+	if seen, ok := faces.Seen[oldRel]; ok {
+		delete(faces.Seen, oldRel)
+		faces.Seen[newRel] = seen
+		changed = true
+	}
+	return changed
+}
+
+// renameFacePrefix follows a whole folder, for every photo underneath it.
+func renameFacePrefix(oldDir, newDir string) {
+	oldDir = strings.TrimSuffix(filepath.ToSlash(oldDir), "/")
+	newDir = strings.TrimSuffix(filepath.ToSlash(newDir), "/")
+	if oldDir == newDir || oldDir == "" {
+		return
+	}
+	prefix := oldDir + "/"
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+
+	// Collect first: renameFaceLocked mutates the maps being ranged over.
+	var moves [][2]string
+	seenPaths := map[string]bool{}
+	collect := func(p string) {
+		// Match on path segments, never a raw prefix — moving "Trip" must not
+		// drag "Trips-other" along with it.
+		if p != oldDir && !strings.HasPrefix(p, prefix) {
+			return
+		}
+		if seenPaths[p] {
+			return
+		}
+		seenPaths[p] = true
+		moves = append(moves, [2]string{p, newDir + strings.TrimPrefix(p, oldDir)})
+	}
+	for _, fc := range faces.Faces {
+		collect(fc.Path)
+	}
+	for p := range faces.Seen {
+		collect(p)
+	}
+	changed := false
+	for _, m := range moves {
+		if renameFaceLocked(m[0], m[1]) {
+			changed = true
+		}
+	}
+	if changed {
+		saveFacesLocked()
+	}
+}
+
+// forgetFaces drops everything recorded for a photo that is gone, so a deleted
+// file doesn't leave broken crops sitting in a person's group forever.
+func forgetFaces(rel string) {
+	rel = filepath.ToSlash(rel)
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+	changed := false
+	for id, fc := range faces.Faces {
+		if fc.Path == rel {
+			delete(faces.Faces, id)
+			changed = true
+		}
+	}
+	if _, ok := faces.Seen[rel]; ok {
+		delete(faces.Seen, rel)
+		changed = true
+	}
+	if changed {
+		saveFacesLocked()
+	}
+}
+
+// pruneMissingFaces drops faces whose photo is no longer on disk. A backstop
+// for anything that bypasses the app — a file removed over SMB, say.
+func pruneMissingFaces() int {
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+	gone := map[string]bool{}
+	for _, fc := range faces.Faces {
+		if _, checked := gone[fc.Path]; checked {
+			continue
+		}
+		full, err := safePath(baseDir, fc.Path)
+		missing := err != nil
+		if !missing {
+			if fi, serr := os.Lstat(full); serr != nil || !fi.Mode().IsRegular() {
+				missing = true
+			}
+		}
+		gone[fc.Path] = missing
+	}
+	n := 0
+	for id, fc := range faces.Faces {
+		if gone[fc.Path] {
+			delete(faces.Faces, id)
+			delete(faces.Seen, fc.Path)
+			n++
+		}
+	}
+	if n > 0 {
+		saveFacesLocked()
+	}
+	return n
 }
 
 // ── Clustering ───────────────────────────────────────────────────────────────

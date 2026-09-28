@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.26.1"
+const appVersion = "2.26.2"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2912,6 +2912,12 @@ func adminRenameFolderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	invalidateCacheTree(full)
+	if or, err := filepath.Rel(baseDir, full); err == nil {
+		if nr, err2 := filepath.Rel(baseDir, newFull); err2 == nil {
+			renameFavoritePrefix(filepath.ToSlash(or), filepath.ToSlash(nr))
+			renameFacePrefix(filepath.ToSlash(or), filepath.ToSlash(nr))
+		}
+	}
 	if err := os.Rename(full, newFull); err != nil {
 		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -3089,11 +3095,13 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 			invalidateCacheTree(src)
 			if destRel != "" {
 				renameFavoritePrefix(rel, destRel)
+				renameFacePrefix(rel, destRel)
 			}
 		} else {
 			invalidateCache(src)
 			if destRel != "" {
 				renameFavorite(rel, destRel)
+				renameFacePath(rel, destRel)
 			}
 		}
 		if err := os.Rename(src, dest); err != nil {
@@ -3173,6 +3181,10 @@ func adminBatchRenameHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		invalidateCache(full)
+		if nr, err := filepath.Rel(baseDir, newFull); err == nil {
+			renameFavorite(rel, filepath.ToSlash(nr))
+			renameFacePath(rel, filepath.ToSlash(nr))
+		}
 		if err := os.Rename(full, newFull); err != nil {
 			errs = append(errs, rel+": "+err.Error())
 		}
@@ -3313,6 +3325,12 @@ func adminMoveFileHandler(w http.ResponseWriter, r *http.Request) {
 		destFull = filepath.Join(destDir, fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext))
 	}
 	invalidateCache(srcFull)
+	if sr, err := filepath.Rel(baseDir, srcFull); err == nil {
+		if dr, err2 := filepath.Rel(baseDir, destFull); err2 == nil {
+			renameFavorite(filepath.ToSlash(sr), filepath.ToSlash(dr))
+			renameFacePath(filepath.ToSlash(sr), filepath.ToSlash(dr))
+		}
+	}
 	// Fast rename (same drive)
 	if err := os.Rename(srcFull, destFull); err != nil {
 		// Cross-drive fallback: copy then delete
@@ -3977,6 +3995,11 @@ func moveToTrash(src, originalRel string) error {
 	}
 
 	invalidateCache(src)
+	// The photo is leaving the library, so drop its faces — otherwise the
+	// group keeps a member whose crop can no longer be rendered.
+	if r, err := filepath.Rel(baseDir, src); err == nil {
+		forgetFaces(filepath.ToSlash(r))
+	}
 	// Fast path: rename (same drive)
 	if err := os.Rename(src, dest); err == nil {
 		writeTrashInfo(dest, originalRel)
