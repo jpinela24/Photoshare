@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -710,5 +711,90 @@ func TestAssignToUnnamedGroupSticks(t *testing.T) {
 	clusterFaces()
 	if got := personOf("two0"); got != g1 {
 		t.Errorf("re-clustering undid an assignment into an unnamed group: now %q, want %q", got, g1)
+	}
+}
+
+// The upgrade path for someone who moved photos while running a build that
+// didn't track faces: the index still points at the old locations, and the
+// files are somewhere else. The scan finds them at their new paths and the
+// prune drops the stale records — the ordering matters, because if grouping
+// ran first the same photo would appear twice in one person.
+func TestStaleRecordsFromOldMovesArePrunedNotDuplicated(t *testing.T) {
+	faceTestEnv(t)
+	lib := t.TempDir()
+	prevBase := baseDir
+	baseDir = lib
+	rootMu.Lock()
+	rootCacheBase, rootCacheReal = "", ""
+	rootMu.Unlock()
+	t.Cleanup(func() {
+		baseDir = prevBase
+		rootMu.Lock()
+		rootCacheBase, rootCacheReal = "", ""
+		rootMu.Unlock()
+	})
+
+	// The photo now lives at the new path; nothing is at the old one.
+	if err := os.MkdirAll(filepath.Join(lib, "New"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lib, "New", "a.jpg"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rng := rand.New(rand.NewSource(81))
+	shared := personVec(rng, 90, 0.02)
+	// Three faces of one person that never moved...
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("Stay/p%d.jpg#0", i)
+		addFace(id, personVec(rng, 90, 0.02), 0)
+		faceMu.Lock()
+		faces.Faces[id].Path = fmt.Sprintf("Stay/p%d.jpg", i)
+		faceMu.Unlock()
+		if err := os.MkdirAll(filepath.Join(lib, "Stay"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(lib, "Stay", fmt.Sprintf("p%d.jpg", i)), []byte("x"), 0644)
+	}
+	// ...a stale record pointing at where the moved photo used to be...
+	addFace("Old/a.jpg#0", shared, 0)
+	faceMu.Lock()
+	faces.Faces["Old/a.jpg#0"].Path = "Old/a.jpg"
+	faces.Seen["Old/a.jpg"] = faceSeen{Size: 1, ModNs: 1, Faces: 1}
+	// ...and the record a fresh scan would create at the new path.
+	faceMu.Unlock()
+	addFace("New/a.jpg#0", shared, 0)
+	faceMu.Lock()
+	faces.Faces["New/a.jpg#0"].Path = "New/a.jpg"
+	faceMu.Unlock()
+
+	if n := pruneMissingFaces(); n != 1 {
+		t.Errorf("pruned %d, want 1 (just the stale record)", n)
+	}
+	clusterFaces()
+
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	if faces.Faces["Old/a.jpg#0"] != nil {
+		t.Error("the stale record survived — its crop would 404 inside a group")
+	}
+	if _, ok := faces.Seen["Old/a.jpg"]; ok {
+		t.Error("the stale Seen entry survived")
+	}
+	fresh := faces.Faces["New/a.jpg#0"]
+	if fresh == nil {
+		t.Fatal("the re-detected face was lost")
+	}
+	// One photo, one face in the group — not two.
+	seen := map[string]int{}
+	for _, f := range faces.Faces {
+		if f.Person == fresh.Person {
+			seen[f.Path]++
+		}
+	}
+	for p, n := range seen {
+		if n > 1 {
+			t.Errorf("%s appears %d times in the group — the move produced a duplicate", p, n)
+		}
 	}
 }
