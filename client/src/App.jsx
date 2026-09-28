@@ -1368,6 +1368,7 @@ function PeopleView({ onOpen }) {
   const [picked, setPicked]   = useState(() => new Set()) // groups picked to merge
   const [selFaces, setSelFaces] = useState(() => new Set())
   const [naming, setNaming]   = useState(null)
+  const [mergePrompt, setMergePrompt] = useState(null)
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1400,10 +1401,29 @@ function PeopleView({ onOpen }) {
     return r.ok
   }
 
+  // Naming a group the same as an existing person is how you say "these are
+  // the same person" — but the server won't act on that silently, because
+  // families reuse names. It reports the clash and we ask.
   const saveName = async (id) => {
-    await post('/api/people/name', { id, name: nameText })
+    const name = nameText
     setNaming(null); setNameText('')
-    // Naming moves the group to a stable id, so the open panel is stale.
+    const r = await adminFetch('/api/people/name', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name }),
+    })
+    if (r.status === 409) {
+      const { conflict } = await r.json()
+      setMergePrompt({ id, name, other: conflict })
+      return
+    }
+    await loadPeople()
+    if (openId === id) setOpenId(null) // naming moves the group to a new id
+  }
+
+  const confirmNameMerge = async () => {
+    const { id, name } = mergePrompt
+    setMergePrompt(null)
+    await post('/api/people/name', { id, name, merge: true })
     if (openId === id) setOpenId(null)
   }
 
@@ -1512,6 +1532,18 @@ function PeopleView({ onOpen }) {
           </div>
         ))}
       </div>
+
+      {mergePrompt && (
+        <ConfirmDialog
+          title={`Merge with ${mergePrompt.other.name}?`}
+          body={`There is already a person called ${mergePrompt.other.name}, in ${mergePrompt.other.count} photo${mergePrompt.other.count === 1 ? '' : 's'}. Merge this group into them? If they are different people, give this one a different name instead.`}
+          confirmLabel="Merge"
+          icon={<UserIcon size={30} />}
+          danger={false}
+          onConfirm={confirmNameMerge}
+          onClose={() => setMergePrompt(null)}
+        />
+      )}
 
       {picked.size > 0 && (
         <div className="trash-selbar">
@@ -1957,7 +1989,7 @@ function EmptyTrashConfirm({ onConfirm, onClose }) {
 // ConfirmDialog — a plain yes/no stop for a destructive action, styled like the
 // delete-file confirm. (Emptying the whole bin has its own countdown dialog;
 // this is for the smaller, reversible-in-principle case of a selection.)
-function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }) {
+function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose, icon = null, danger = true }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -1967,12 +1999,13 @@ function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }) {
   return ReactDOM.createPortal(
     <div className="adm-overlay" onClick={onClose}>
       <div className="adm-modal adm-confirm" onClick={e => e.stopPropagation()}>
-        <div className="adm-modal-icon adm-danger-icon"><TrashIcon size={30} /></div>
+        <div className={`adm-modal-icon ${danger ? 'adm-danger-icon' : ''}`}>{icon || <TrashIcon size={30} />}</div>
         <h2 className="adm-modal-title">{title}</h2>
-        <p className="adm-warn">{body}</p>
+        {/* adm-warn is red — right for a delete, wrong for a merge. */}
+        <p className={danger ? 'adm-warn' : 'adm-modal-sub'}>{body}</p>
         <div className="adm-btns">
           <button className="adm-btn" onClick={onClose}>Cancel</button>
-          <button className="adm-btn adm-btn-danger" onClick={onConfirm}>{confirmLabel}</button>
+          <button className={`adm-btn ${danger ? 'adm-btn-danger' : 'adm-btn-primary'}`} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>,
@@ -3081,7 +3114,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.26.2'
+const APP_VERSION = '2.26.3'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

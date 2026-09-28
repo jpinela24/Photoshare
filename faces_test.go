@@ -129,7 +129,7 @@ func TestNamedPeopleSurviveReclustering(t *testing.T) {
 	if group == "" {
 		t.Fatal("no group formed")
 	}
-	if err := namePerson(group, "Alex"); err != nil {
+	if err := namePerson(group, "Alex", false); err != nil {
 		t.Fatal(err)
 	}
 	// Naming moves the group out of the automatic namespace on purpose:
@@ -204,7 +204,7 @@ func TestDetachRemovesFaceFromGroup(t *testing.T) {
 		addFace("p"+string(rune('0'+i)), personVec(rng, 7, 0.02), 0)
 	}
 	clusterFaces()
-	namePerson(personOf("p0"), "Sam")
+	namePerson(personOf("p0"), "Sam", false)
 	group := personOf("p0") // naming promotes the group to a stable id
 
 	if err := detachFaces([]string{"p1"}); err != nil {
@@ -253,7 +253,7 @@ func TestFaceStorePersists(t *testing.T) {
 	}
 	clusterFaces()
 	group := personOf("z0")
-	namePerson(group, "Robin")
+	namePerson(group, "Robin", false)
 
 	if _, err := os.Stat(facesPath()); err != nil {
 		t.Fatalf("nothing was written to disk: %v", err)
@@ -509,5 +509,91 @@ func TestBatchMoveHandlerCarriesFacesForFolders(t *testing.T) {
 	}
 	if _, ok := faces.Seen["Dest/Trip/Inner/b.jpg"]; !ok {
 		t.Error("the nested Seen entry was not re-keyed")
+	}
+}
+
+// Naming two groups the same thing is how someone says "these are the same
+// person" — the natural move when one person is split across ages. It must not
+// silently create two people with one name, and it must not silently merge
+// either, since families reuse names.
+func TestSameNameReportsAConflict(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(41))
+	for i := 0; i < 4; i++ {
+		addFace("young"+string(rune('0'+i)), personVec(rng, 50, 0.02), 0)
+		addFace("older"+string(rune('0'+i)), personVec(rng, 51, 0.02), 0)
+	}
+	clusterFaces()
+	g1, g2 := personOf("young0"), personOf("older0")
+	if g1 == "" || g2 == "" || g1 == g2 {
+		t.Fatalf("expected two groups, got %q and %q", g1, g2)
+	}
+	if err := namePerson(g1, "Alex", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Naming the second group "Alex" must report the clash and change nothing.
+	err := namePerson(g2, "Alex", false)
+	c, ok := err.(*nameConflict)
+	if !ok {
+		t.Fatalf("second name returned %v, want a nameConflict", err)
+	}
+	if c.Count != 4 {
+		t.Errorf("conflict reports %d photos, want 4", c.Count)
+	}
+	if len(listPeople()) != 2 {
+		t.Error("the conflicting name was applied anyway")
+	}
+	if got := personOf("older0"); got != g2 {
+		t.Errorf("the second group moved despite the conflict: now %q", got)
+	}
+
+	// With merge, the two become one person holding every face.
+	if err := namePerson(g2, "Alex", true); err != nil {
+		t.Fatal(err)
+	}
+	people := listPeople()
+	if len(people) != 1 {
+		t.Fatalf("after merging got %d people, want 1: %+v", len(people), people)
+	}
+	if people[0].Count != 8 {
+		t.Errorf("merged person has %d faces, want all 8", people[0].Count)
+	}
+	// And it has to survive the next pass, like any other merge.
+	clusterFaces()
+	if got := personOf("young0"); got != personOf("older0") {
+		t.Error("re-clustering split the name-merged person again")
+	}
+}
+
+// Case and stray spaces are the same intent, not a different person.
+func TestNameConflictIgnoresCaseAndSpace(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 4; i++ {
+		addFace("a"+string(rune('0'+i)), personVec(rng, 52, 0.02), 0)
+		addFace("b"+string(rune('0'+i)), personVec(rng, 53, 0.02), 0)
+	}
+	clusterFaces()
+	namePerson(personOf("a0"), "Alex", false)
+
+	if _, ok := namePerson(personOf("b0"), "  alex ", false).(*nameConflict); !ok {
+		t.Error(`"  alex " was treated as a different person from "Alex"`)
+	}
+}
+
+// Renaming a person to the name they already have must not report a conflict
+// with themselves.
+func TestRenamingToOwnNameIsFine(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(43))
+	for i := 0; i < 4; i++ {
+		addFace("s"+string(rune('0'+i)), personVec(rng, 54, 0.02), 0)
+	}
+	clusterFaces()
+	id := personOf("s0")
+	namePerson(id, "Sam", false)
+	if err := namePerson(personOf("s0"), "Sam", false); err != nil {
+		t.Errorf("renaming a person to their own name failed: %v", err)
 	}
 }

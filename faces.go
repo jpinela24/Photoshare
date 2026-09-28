@@ -677,9 +677,43 @@ func promoteLocked(oldID string) string {
 	return newID
 }
 
+// nameConflict reports that another person already holds the name being
+// assigned. Naming two groups "Alex" is how someone naturally expresses "these
+// are the same person", but acting on that silently is wrong: families reuse
+// names, and an accidental merge is tedious to unpick. So the caller is told,
+// and asks.
+type nameConflict struct {
+	ID    string
+	Name  string
+	Count int
+}
+
+func (e *nameConflict) Error() string { return "a person called " + e.Name + " already exists" }
+
+// findNamedLocked returns another person with this name, if any. Comparison is
+// case- and space-insensitive: "alex" and "Alex " are the same intent.
+// The caller must hold faceMu.
+func findNamedLocked(name, excludeID string) *Person {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, p := range faces.Persons {
+		if p.ID == excludeID || !p.Named {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(p.Name)) == want {
+			return p
+		}
+	}
+	return nil
+}
+
 // namePerson turns an automatic cluster into a confirmed person. Naming is what
 // protects a group from being rebuilt by the next clustering pass.
-func namePerson(id, name string) error {
+//
+// If another person already holds the name and merge is false, nothing is
+// changed and a *nameConflict is returned so the caller can ask. With merge
+// true the two groups are folded together, which is the usual answer when the
+// same person has been split across ages.
+func namePerson(id, name string, merge bool) error {
 	faceMu.Lock()
 	defer faceMu.Unlock()
 	loadFacesLocked()
@@ -692,6 +726,27 @@ func namePerson(id, name string) error {
 		// Clearing a name releases the group back to automatic clustering.
 		p.Named = false
 		p.Name = ""
+		saveFacesLocked()
+		return nil
+	}
+	if other := findNamedLocked(name, id); other != nil {
+		if !merge {
+			n := 0
+			for _, f := range faces.Faces {
+				if f.Person == other.ID {
+					n++
+				}
+			}
+			return &nameConflict{ID: other.ID, Name: other.Name, Count: n}
+		}
+		// Fold this group into the existing person, so one name means one
+		// person and later photos match against every age of them.
+		for _, f := range faces.Faces {
+			if f.Person == id {
+				f.Person = other.ID
+			}
+		}
+		delete(faces.Persons, id)
 		saveFacesLocked()
 		return nil
 	}
@@ -898,12 +953,26 @@ func peopleNameHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	var body struct{ ID, Name string }
+	var body struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Merge bool   `json:"merge"`
+	}
 	if json.NewDecoder(r.Body).Decode(&body) != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := namePerson(body.ID, body.Name); err != nil {
+	err := namePerson(body.ID, body.Name, body.Merge)
+	if c, ok := err.(*nameConflict); ok {
+		// 409: nothing was changed. The client asks, then retries with merge.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{
+			"conflict": map[string]any{"id": c.ID, "name": c.Name, "count": c.Count},
+		})
+		return
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
