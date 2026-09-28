@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.26.3"
+const appVersion = "2.27.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -4739,6 +4739,7 @@ func main() {
 	mux.HandleFunc("/api/people/name", withCORS(mutate(http.MethodPost, peopleNameHandler)))
 	mux.HandleFunc("/api/people/merge", withCORS(mutate(http.MethodPost, peopleMergeHandler)))
 	mux.HandleFunc("/api/people/detach", withCORS(mutate(http.MethodPost, peopleDetachHandler)))
+	mux.HandleFunc("/api/people/assign", withCORS(mutate(http.MethodPost, peopleAssignHandler)))
 	mux.HandleFunc("/api/favorites", protected(func(w http.ResponseWriter, r *http.Request) {
 		// One path, two verbs: GET reads the list, POST toggles one entry. The
 		// POST goes through mutate() for the method + CSRF checks.

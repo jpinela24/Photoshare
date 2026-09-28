@@ -803,6 +803,55 @@ func mergePeople(ids []string) error {
 	return nil
 }
 
+// assignFaces moves faces to a person, by id or by name.
+//
+// detachFaces only ever says "not them", which leaves the face unassigned and
+// waiting to be regrouped. Auditing needs the positive form too — "this one IS
+// Alex" — otherwise a face in the wrong group can only be pushed out, never
+// put right, and the correction is lost at the next pass.
+//
+// An empty personID with a name creates the person; naming an existing one
+// targets them, so assigning to "Alex" always means the Alex you already have.
+func assignFaces(faceIDs []string, personID, name string) (string, error) {
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+
+	name = strings.TrimSpace(name)
+	target := faces.Persons[personID]
+	if target == nil && name != "" {
+		if existing := findNamedLocked(name, ""); existing != nil {
+			target = existing
+		} else {
+			faces.NextID++
+			id := fmt.Sprintf("p:%d", faces.NextID)
+			target = &Person{ID: id, Name: name, Named: true}
+			faces.Persons[id] = target
+		}
+	}
+	if target == nil {
+		return "", fmt.Errorf("no such person")
+	}
+	// Assigning by hand is a decision, so the group must survive re-clustering
+	// — otherwise the correction silently evaporates on the next scan.
+	target.Named = true
+	if target.Name == "" && name != "" {
+		target.Name = name
+	}
+	moved := 0
+	for _, id := range faceIDs {
+		if f := faces.Faces[id]; f != nil {
+			f.Person = target.ID
+			moved++
+		}
+	}
+	if moved == 0 {
+		return "", fmt.Errorf("no such face")
+	}
+	saveFacesLocked()
+	return target.ID, nil
+}
+
 // detachFaces is the "that isn't them" correction: the faces leave the group
 // and are left unassigned for the next pass to regroup.
 func detachFaces(ids []string) error {
@@ -919,7 +968,9 @@ func faceCropHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cached like any other derivative, so a group of 200 faces isn't 200
 	// decodes of full-size photos every time it's opened.
-	cache := cachePathFor(full, "_face"+strings.TrimPrefix(f.ID[strings.LastIndex(f.ID, "#"):], "#"))
+	sizeKey := clampAtoi(r.URL.Query().Get("size"), 160, 96, 400)
+	cache := cachePathFor(full, fmt.Sprintf("_face%s_%d",
+		strings.TrimPrefix(f.ID[strings.LastIndex(f.ID, "#"):], "#"), sizeKey))
 	if _, err := os.Stat(cache); err == nil {
 		http.ServeFile(w, r, cache)
 		return
@@ -936,7 +987,11 @@ func faceCropHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad crop", http.StatusInternalServerError)
 		return
 	}
-	crop := imaging.Thumbnail(imaging.Crop(img, rect), 160, 160, imaging.Lanczos)
+	// Reviewing a face means deciding whether it really is that person, which
+	// 160px does not support. Callers can ask for larger; capped so this can't
+	// be used to make the server render arbitrarily big images.
+	size := clampAtoi(r.URL.Query().Get("size"), 160, 96, 400)
+	crop := imaging.Thumbnail(imaging.Crop(img, rect), size, size, imaging.Lanczos)
 	if err := imaging.Save(crop, cache); err != nil {
 		// Serving still works without the cache; only the next request pays.
 		var buf bytes.Buffer
@@ -1015,6 +1070,29 @@ func peopleDetachHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// POST /api/people/assign  {"faceIds":[...], "personId":"p:2"}  or  {"faceIds":[...], "name":"Alex"}
+func peopleAssignHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		FaceIDs  []string `json:"faceIds"`
+		PersonID string   `json:"personId"`
+		Name     string   `json:"name"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	id, err := assignFaces(body.FaceIDs, body.PersonID, body.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"personId": id})
 }
 
 // POST /api/faces/scan — re-run detection over anything new, then regroup.

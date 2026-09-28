@@ -1436,6 +1436,25 @@ function PeopleView({ onOpen }) {
     setPicked(new Set()); setOpenId(null)
   }
 
+  // The positive correction: "this face IS that person". Without it a
+  // misplaced face can only be pushed out, and the next pass is free to put it
+  // back where it was.
+  const assignTo = async (value) => {
+    const ids = [...selFaces]
+    if (!ids.length) return
+    let body
+    if (value === '__new__') {
+      const name = window.prompt('Name for the new person')
+      if (!name || !name.trim()) return
+      body = { faceIds: ids, name: name.trim() }
+    } else {
+      body = { faceIds: ids, personId: value }
+    }
+    await post('/api/people/assign', body)
+    setSelFaces(new Set())
+    const id = openId; setOpenId(null); setTimeout(() => setOpenId(id), 50)
+  }
+
   const detach = async () => {
     if (!selFaces.size) return
     await post('/api/people/detach', { faceIds: [...selFaces] })
@@ -1555,36 +1574,68 @@ function PeopleView({ onOpen }) {
         </div>
       )}
 
-      {/* One group's photos, with a way to say "that isn't them". */}
+      {/* Auditing one group. Crops are large enough to actually judge by, and
+          each face carries the photo and date it came from — a face alone is
+          often not enough to decide, but "the beach trip, 2019" usually is. */}
       {openId && (
         <div className="person-detail">
           <div className="memories-head">
             <h3 className="trash-title">{people.find(p => p.id === openId)?.name || 'Unnamed group'}</h3>
-            <span className="memories-sub">{groupFaces.length} photo{groupFaces.length === 1 ? '' : 's'}</span>
-            {token && selFaces.size > 0 && (
-              <button className="trash-select-btn" onClick={detach}>Remove {selFaces.size} from this person</button>
+            <span className="memories-sub">
+              {selFaces.size ? `${selFaces.size} of ${groupFaces.length} selected` : `${groupFaces.length} photo${groupFaces.length === 1 ? '' : 's'}`}
+            </span>
+            {token && groupFaces.length > 0 && (
+              <button className="trash-select-btn" onClick={() =>
+                setSelFaces(selFaces.size === groupFaces.length ? new Set() : new Set(groupFaces.map(f => f.id)))
+              }>{selFaces.size === groupFaces.length ? 'Clear' : 'Select all'}</button>
             )}
             <button className="trash-select-btn" onClick={() => setOpenId(null)}>Close</button>
           </div>
-          <div className="memories-grid">
+
+          <div className="face-review">
             {groupFaces.map(f => (
               <div key={f.id} className={`face-cell ${selFaces.has(f.id) ? 'face-cell-sel' : ''}`}>
-                <button className="memories-cell" title={f.path}
-                  onClick={() => onOpen({ name: f.name, path: f.path, isVideo: false })}>
-                  <img src={`/api/faces/crop?id=${encodeURIComponent(f.id)}`} alt="" loading="lazy" />
+                <button
+                  className="face-crop"
+                  title={token ? 'Click to select · double-click to open the photo' : f.path}
+                  onClick={() => token
+                    ? setSelFaces(prev => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n })
+                    : onOpen({ name: f.name, path: f.path, isVideo: false })}
+                  onDoubleClick={() => onOpen({ name: f.name, path: f.path, isVideo: false })}
+                >
+                  <img src={`/api/faces/crop?id=${encodeURIComponent(f.id)}&size=240`} alt="" loading="lazy" />
+                  {selFaces.has(f.id) && <span className="face-tick">✓</span>}
                 </button>
-                {token && (
-                  <label className="face-pick" title="Not this person">
-                    <input
-                      type="checkbox"
-                      checked={selFaces.has(f.id)}
-                      onChange={() => setSelFaces(prev => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n })}
-                    />
-                  </label>
-                )}
+                <div className="face-meta">
+                  <span className="face-file" title={f.path}>{f.path.split('/').slice(-2).join('/')}</span>
+                  {f.taken > 0 && <span className="face-date">{new Date(f.taken * 1000).toLocaleDateString()}</span>}
+                </div>
               </div>
             ))}
           </div>
+
+          {/* Actions on a selection: say who they are, or push them out. */}
+          {token && selFaces.size > 0 && (
+            <div className="trash-selbar">
+              <button className="sel-bar-close" onClick={() => setSelFaces(new Set())} title="Clear"><CloseIcon size={14} /></button>
+              <span className="sel-bar-count">{selFaces.size} face{selFaces.size === 1 ? '' : 's'}</span>
+              <select
+                className="sort-select"
+                value=""
+                onChange={e => { if (e.target.value) assignTo(e.target.value) }}
+                title="Move these faces to another person"
+              >
+                <option value="">Move to…</option>
+                {people.filter(p => p.id !== openId && p.named).map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+                <option value="__new__">New person…</option>
+              </select>
+              <button className="sel-bar-action sel-bar-danger" onClick={detach}>
+                Remove from this person
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -3114,7 +3165,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.26.3'
+const APP_VERSION = '2.27.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

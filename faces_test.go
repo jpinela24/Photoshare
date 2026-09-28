@@ -597,3 +597,118 @@ func TestRenamingToOwnNameIsFine(t *testing.T) {
 		t.Errorf("renaming a person to their own name failed: %v", err)
 	}
 }
+
+// Assigning a face by hand is the positive correction — "this one IS Alex".
+// Without it a face in the wrong group can only be pushed out, and the next
+// pass is free to put it straight back.
+func TestAssignFaceToExistingPerson(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(61))
+	for i := 0; i < 4; i++ {
+		addFace("alex"+string(rune('0'+i)), personVec(rng, 60, 0.02), 0)
+		addFace("sam"+string(rune('0'+i)), personVec(rng, 61, 0.02), 0)
+	}
+	clusterFaces()
+	alex, sam := personOf("alex0"), personOf("sam0")
+	if alex == "" || sam == "" || alex == sam {
+		t.Fatalf("expected two groups, got %q and %q", alex, sam)
+	}
+	namePerson(alex, "Alex", false)
+	alex = personOf("alex0")
+
+	// One of Sam's faces is really Alex.
+	if _, err := assignFaces([]string{"sam0"}, alex, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := personOf("sam0"); got != alex {
+		t.Errorf("assigned face is in %q, want %q", got, alex)
+	}
+
+	// The correction must survive the next pass — that is the whole point.
+	clusterFaces()
+	if got := personOf("sam0"); got != alex {
+		t.Errorf("re-clustering undid the hand assignment: now %q, want %q", got, alex)
+	}
+}
+
+// Assigning to a name that doesn't exist creates that person; assigning to one
+// that does targets them rather than making a second person with one name.
+func TestAssignByName(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(62))
+	for i := 0; i < 4; i++ {
+		addFace("f"+string(rune('0'+i)), personVec(rng, 62, 0.02), 0)
+	}
+	clusterFaces()
+
+	id, err := assignFaces([]string{"f0"}, "", "Robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if personOf("f0") != id {
+		t.Error("the face was not moved to the new person")
+	}
+
+	// A second assignment by the same name must reuse the person.
+	id2, err := assignFaces([]string{"f1"}, "", "  robin ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id2 != id {
+		t.Errorf("assigning to %q made a second person (%s vs %s)", "robin", id2, id)
+	}
+	named := 0
+	for _, p := range listPeople() {
+		if p.Name == "Robin" {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Errorf("got %d people called Robin, want 1", named)
+	}
+}
+
+// A bad request must not half-apply.
+func TestAssignRejectsUnknownTargets(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(63))
+	addFace("g0", personVec(rng, 63, 0.02), 0)
+
+	if _, err := assignFaces([]string{"g0"}, "p:999", ""); err == nil {
+		t.Error("assigning to a person that doesn't exist was accepted")
+	}
+	if _, err := assignFaces([]string{"nope"}, "", "Someone"); err == nil {
+		t.Error("assigning a face that doesn't exist was accepted")
+	}
+}
+
+// Assigning into a group that hasn't been named yet is still a decision, so it
+// has to be protected from the next clustering pass like any other. Without
+// this the correction is silently undone on the next scan — the worst kind of
+// bug, because nothing reports it.
+func TestAssignToUnnamedGroupSticks(t *testing.T) {
+	faceTestEnv(t)
+	rng := rand.New(rand.NewSource(64))
+	for i := 0; i < 4; i++ {
+		addFace("one"+string(rune('0'+i)), personVec(rng, 70, 0.02), 0)
+		addFace("two"+string(rune('0'+i)), personVec(rng, 71, 0.02), 0)
+	}
+	clusterFaces()
+	g1, g2 := personOf("one0"), personOf("two0")
+	if g1 == "" || g2 == "" || g1 == g2 {
+		t.Fatalf("expected two groups, got %q and %q", g1, g2)
+	}
+
+	// Neither group has been named. Move a face across anyway.
+	if _, err := assignFaces([]string{"two0"}, g1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := personOf("two0"); got != g1 {
+		t.Fatalf("face is in %q right after the assignment, want %q", got, g1)
+	}
+
+	clusterFaces()
+	if got := personOf("two0"); got != g1 {
+		t.Errorf("re-clustering undid an assignment into an unnamed group: now %q, want %q", got, g1)
+	}
+}
