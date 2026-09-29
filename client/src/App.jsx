@@ -1359,11 +1359,12 @@ function TimelineView({ onOpen, onItems }) {
 // across a big age gap, so one person legitimately produces several groups.
 // Merging is therefore the primary action, not an edge case.
 
-function PeopleView({ onOpen }) {
+function PeopleView({ onOpen, onItems }) {
   const { token } = useContext(AdminCtx)
   const [people, setPeople]   = useState(null)
   const [status, setStatus]   = useState(null)
   const [openId, setOpenId]   = useState(null)   // group being inspected
+  const [mode, setMode]       = useState('faces') // 'faces' = crops, 'photos' = whole frames
   const [groupFaces, setGroupFaces] = useState([])
   const [picked, setPicked]   = useState(() => new Set()) // groups picked to merge
   const [selFaces, setSelFaces] = useState(() => new Set())
@@ -1392,6 +1393,27 @@ function PeopleView({ onOpen }) {
     fetch(`/api/people/faces?id=${encodeURIComponent(openId)}`, { credentials: 'same-origin' })
       .then(r => r.json()).then(d => setGroupFaces(d.faces || [])).catch(() => setGroupFaces([]))
   }, [openId])
+
+  // The faces of a group are not the same list as its photos: one frame can
+  // hold two faces the clusterer put in the same group, and then the photo
+  // would appear twice. Collapse by path, and remember how many faces each
+  // frame contributed — a frame with two faces of "the same" person is itself
+  // a grouping mistake worth seeing while auditing.
+  const groupPhotos = useMemo(() => {
+    const by = new Map()
+    for (const f of groupFaces) {
+      const at = by.get(f.path)
+      if (at) { at.faces++; continue }
+      by.set(f.path, { path: f.path, name: f.name, isVideo: false, taken: f.taken, faces: 1 })
+    }
+    return [...by.values()]
+  }, [groupFaces])
+
+  // Hand the group's photos to the viewer so it pages through them the way it
+  // pages a folder. Without this, opening a photo from a group dead-ends with
+  // no prev/next, which makes auditing a 200-photo group unusable.
+  useEffect(() => { onItems?.(openId ? groupPhotos : null) }, [openId, groupPhotos, onItems])
+  useEffect(() => () => onItems?.(null), [onItems]) // release on unmount
 
   const post = async (url, body) => {
     const r = await adminFetch(url, token, {
@@ -1582,9 +1604,29 @@ function PeopleView({ onOpen }) {
           <div className="memories-head">
             <h3 className="trash-title">{people.find(p => p.id === openId)?.name || 'Unnamed group'}</h3>
             <span className="memories-sub">
-              {selFaces.size ? `${selFaces.size} of ${groupFaces.length} selected` : `${groupFaces.length} photo${groupFaces.length === 1 ? '' : 's'}`}
+              {selFaces.size
+                ? `${selFaces.size} of ${groupFaces.length} selected`
+                : `${groupPhotos.length} photo${groupPhotos.length === 1 ? '' : 's'} · ${groupFaces.length} face${groupFaces.length === 1 ? '' : 's'}`}
             </span>
-            {token && groupFaces.length > 0 && (
+            {/* Crops to judge identity by, whole frames to judge context by.
+                Both are needed: a face alone often isn't enough to tell a
+                cousin from a sibling, and the photo around it usually is. */}
+            <div className="type-chips face-mode-toggle" role="tablist">
+              {[['faces', 'Faces'], ['photos', 'Photos']].map(([val, label]) => (
+                <button
+                  key={val}
+                  role="tab"
+                  aria-selected={mode === val}
+                  className={`type-chip ${mode === val ? 'type-chip-on' : ''}`}
+                  // Leaving the crops drops the selection with them: the
+                  // per-face actions aren't reachable from the photo grid, and
+                  // an invisible selection driving a visible action bar is how
+                  // you detach the wrong faces.
+                  onClick={() => { setMode(val); if (val !== 'faces') setSelFaces(new Set()) }}
+                >{label}</button>
+              ))}
+            </div>
+            {token && mode === 'faces' && groupFaces.length > 0 && (
               <button className="trash-select-btn" onClick={() =>
                 setSelFaces(selFaces.size === groupFaces.length ? new Set() : new Set(groupFaces.map(f => f.id)))
               }>{selFaces.size === groupFaces.length ? 'Clear' : 'Select all'}</button>
@@ -1592,7 +1634,20 @@ function PeopleView({ onOpen }) {
             <button className="trash-select-btn" onClick={() => setOpenId(null)}>Close</button>
           </div>
 
-          <div className="face-review">
+          {mode === 'photos' && (
+            <div className="memories-grid">
+              {groupPhotos.map(it => (
+                <button key={it.path} className="memories-cell" title={it.path}
+                  onClick={() => onOpen({ name: it.name, path: it.path, isVideo: false })}>
+                  <img src={`/api/thumb?path=${encodeURIComponent(it.path)}`} alt={it.name} loading="lazy" />
+                  {it.taken > 0 && <span className="face-photo-date">{new Date(it.taken * 1000).toLocaleDateString()}</span>}
+                  {it.faces > 1 && <span className="face-photo-count" title={`${it.faces} faces in this photo were grouped here`}>{it.faces}×</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="face-review" hidden={mode !== 'faces'}>
             {groupFaces.map(f => (
               <div key={f.id} className={`face-cell ${selFaces.has(f.id) ? 'face-cell-sel' : ''}`}>
                 <button
@@ -3165,7 +3220,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.27.1'
+const APP_VERSION = '2.28.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -4223,7 +4278,7 @@ export default function App() {
           {path === MAP_PATH && <MapView onOpen={setSelected} onItems={setViewMedia} />}
           {path === TIMELINE_PATH && <TimelineView onOpen={setSelected} onItems={setViewMedia} />}
           {path === FAVORITES_PATH && <FavoritesView onOpen={setSelected} onItems={setViewMedia} version={favVersion} />}
-          {path === PEOPLE_PATH && <PeopleView onOpen={setSelected} />}
+          {path === PEOPLE_PATH && <PeopleView onOpen={setSelected} onItems={setViewMedia} />}
           {isSpecialPath(path) ? null : folderDupes ? (
             <DuplicatesView
               scopePath={path}

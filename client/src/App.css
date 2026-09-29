@@ -4183,6 +4183,36 @@ body {
 }
 .face-date { font-size: 0.68rem; color: var(--gtext-faint); }
 
+/* The crop grid stays mounted while you're looking at the photos, so switching
+   back doesn't re-fetch a few hundred crops or lose your scroll position.
+   `display: grid` above beats the `hidden` attribute's own display:none, so it
+   has to be restated here — without this line the two grids stack. */
+.face-review[hidden] { display: none; }
+
+/* Faces / Photos switch: reuses the library's type chips, but sits inline in
+   the group header rather than above a grid, so it loses their bottom margin. */
+/* nowrap/flex-shrink:0: the header is a flex row, and letting the pair wrap
+   put "Photos" on a line of its own on phones. It's one control — it moves as
+   a unit, or the header grows a row. */
+.face-mode-toggle { margin: 0; flex-wrap: nowrap; flex-shrink: 0; }
+
+/* Captions on the whole-frame grid. Auditing is a date-driven job — "is this
+   the same child eight years apart?" — so the date rides on the thumbnail
+   instead of below it, where a 130px cell has no room. */
+.face-photo-date {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding: 10px 6px 4px;
+  font-size: 0.66rem; color: #fff; text-align: right;
+  background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+  pointer-events: none;
+}
+.face-photo-count {
+  position: absolute; top: 6px; left: 6px;
+  padding: 1px 6px; border-radius: 999px;
+  font-size: 0.66rem; font-weight: 700;
+  background: rgba(0,0,0,0.6); color: #fff;
+}
+
 @media (max-width: 768px) {
   .face-review { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 }
