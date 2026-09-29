@@ -1370,7 +1370,10 @@ function PeopleView({ onOpen, onItems }) {
   const [selFaces, setSelFaces] = useState(() => new Set())
   const [naming, setNaming]   = useState(null)
   const [mergePrompt, setMergePrompt] = useState(null)
-  const detailRef = useRef(null)
+  // Bumped to refetch the open group's faces after an edit. Closing and
+  // reopening the group would do it too, but now that the group is a dialog
+  // that reads as a flicker of the whole panel.
+  const [groupVersion, setGroupVersion] = useState(0)
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1393,7 +1396,7 @@ function PeopleView({ onOpen, onItems }) {
     if (!openId) { setGroupFaces([]); setSelFaces(new Set()); return }
     fetch(`/api/people/faces?id=${encodeURIComponent(openId)}`, { credentials: 'same-origin' })
       .then(r => r.json()).then(d => setGroupFaces(d.faces || [])).catch(() => setGroupFaces([]))
-  }, [openId])
+  }, [openId, groupVersion])
 
   // The faces of a group are not the same list as its photos: one frame can
   // hold two faces the clusterer put in the same group, and then the photo
@@ -1410,12 +1413,18 @@ function PeopleView({ onOpen, onItems }) {
     return [...by.values()]
   }, [groupFaces])
 
-  // The detail panel sits below the whole grid of groups, so on a library with
-  // a few dozen people it opens several screens down and clicking a cover
-  // looks like it did nothing at all. Bring it into view.
+  // Esc closes the group — unless the photo viewer is open on top of it, which
+  // owns Esc for itself. Without that check, opening a photo from a group and
+  // pressing Esc would close both and dump you back at the grid of groups.
   useEffect(() => {
-    if (!openId || !detailRef.current) return
-    detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (!openId) return
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (document.querySelector('.modal')) return
+      setOpenId(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [openId])
 
   // Hand the group's photos to the viewer so it pages through them the way it
@@ -1483,14 +1492,14 @@ function PeopleView({ onOpen, onItems }) {
     }
     await post('/api/people/assign', body)
     setSelFaces(new Set())
-    const id = openId; setOpenId(null); setTimeout(() => setOpenId(id), 50)
+    setGroupVersion(v => v + 1)
   }
 
   const detach = async () => {
     if (!selFaces.size) return
     await post('/api/people/detach', { faceIds: [...selFaces] })
     setSelFaces(new Set())
-    const id = openId; setOpenId(null); setTimeout(() => setOpenId(id), 50)
+    setGroupVersion(v => v + 1)
   }
 
   const rescan = async () => {
@@ -1608,9 +1617,15 @@ function PeopleView({ onOpen, onItems }) {
       {/* Auditing one group. Crops are large enough to actually judge by, and
           each face carries the photo and date it came from — a face alone is
           often not enough to decide, but "the beach trip, 2019" usually is. */}
-      {openId && (
-        <div className="person-detail" ref={detailRef}>
-          <div className="memories-head">
+      {/* In front, not below. As a panel appended after the grid, its position
+          depended on how many people you had: fine with three, several screens
+          down with a hundred. A dialog over the grid is the same distance from
+          the cover you clicked no matter how many groups exist. Portalled to
+          body so no ancestor's overflow or stacking context can clip it. */}
+      {openId && ReactDOM.createPortal(
+        <div className="adm-overlay person-overlay" onClick={() => setOpenId(null)}>
+          <div className="person-modal" onClick={e => e.stopPropagation()}>
+          <div className="memories-head person-modal-head">
             <h3 className="trash-title">{people.find(p => p.id === openId)?.name || 'Unnamed group'}</h3>
             <span className="memories-sub">
               {selFaces.size
@@ -1643,6 +1658,9 @@ function PeopleView({ onOpen, onItems }) {
             <button className="trash-select-btn" onClick={() => setOpenId(null)}>Close</button>
           </div>
 
+          {/* Only this scrolls, so the header and the selection bar stay put
+              while you work through a group of a few hundred faces. */}
+          <div className="person-modal-body">
           {mode === 'photos' && (
             <div className="memories-grid">
               {groupPhotos.map(it => (
@@ -1700,7 +1718,10 @@ function PeopleView({ onOpen, onItems }) {
               </button>
             </div>
           )}
-        </div>
+          </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -3229,7 +3250,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.28.1'
+const APP_VERSION = '2.28.2'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
