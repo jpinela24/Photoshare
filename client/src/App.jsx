@@ -1370,6 +1370,7 @@ function PeopleView({ onOpen, onItems }) {
   const [selFaces, setSelFaces] = useState(() => new Set())
   const [naming, setNaming]   = useState(null)
   const [mergePrompt, setMergePrompt] = useState(null)
+  const detailRef = useRef(null)
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1408,6 +1409,14 @@ function PeopleView({ onOpen, onItems }) {
     }
     return [...by.values()]
   }, [groupFaces])
+
+  // The detail panel sits below the whole grid of groups, so on a library with
+  // a few dozen people it opens several screens down and clicking a cover
+  // looks like it did nothing at all. Bring it into view.
+  useEffect(() => {
+    if (!openId || !detailRef.current) return
+    detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [openId])
 
   // Hand the group's photos to the viewer so it pages through them the way it
   // pages a folder. Without this, opening a photo from a group dead-ends with
@@ -1600,7 +1609,7 @@ function PeopleView({ onOpen, onItems }) {
           each face carries the photo and date it came from — a face alone is
           often not enough to decide, but "the beach trip, 2019" usually is. */}
       {openId && (
-        <div className="person-detail">
+        <div className="person-detail" ref={detailRef}>
           <div className="memories-head">
             <h3 className="trash-title">{people.find(p => p.id === openId)?.name || 'Unnamed group'}</h3>
             <span className="memories-sub">
@@ -3220,7 +3229,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.28.0'
+const APP_VERSION = '2.28.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
