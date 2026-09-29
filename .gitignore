@@ -1,4 +1,8 @@
 # Build output
+# `go build` with no -o names the binary after the module (photo-share), which
+# is not the same string as the installer's product name (photoshare) — both
+# get dropped in the repo root, so both are ignored here.
+photo-share
 photoshare
 photoshare.exe
 windows/Output/
