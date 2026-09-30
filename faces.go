@@ -1020,7 +1020,27 @@ func faceCropHandler(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, cache)
 		return
 	}
-	img, err := imaging.Open(full, imaging.AutoOrientation(true))
+	// imaging has no HEIC decoder, so on an iPhone library every face crop
+	// failed here and the group rendered as a grid of empty tiles — while the
+	// same photos showed fine in the grid, which converts first.
+	//
+	// Reuse the viewer's _display derivative rather than converting to a temp
+	// file: opening a person and opening one of their photos then share the
+	// one conversion, and it is already invalidated with the rest of the
+	// file's cache when the photo moves or changes.
+	src := full
+	if isHeic(filepath.Base(full)) {
+		disp := cachePathFor(full, variantDisplay)
+		if _, serr := os.Stat(disp); serr != nil {
+			if cerr := heicToJPEG(full, disp); cerr != nil {
+				log.Printf("face crop: heic convert failed for %s: %v", full, cerr)
+				http.Error(w, "cannot convert HEIC", http.StatusInternalServerError)
+				return
+			}
+		}
+		src = disp
+	}
+	img, err := imaging.Open(src, imaging.AutoOrientation(true))
 	if err != nil {
 		http.Error(w, "cannot read photo", http.StatusInternalServerError)
 		return

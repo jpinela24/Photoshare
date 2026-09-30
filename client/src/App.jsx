@@ -1374,6 +1374,15 @@ function PeopleView({ onOpen, onItems }) {
   // reopening the group would do it too, but now that the group is a dialog
   // that reads as a flicker of the whole panel.
   const [groupVersion, setGroupVersion] = useState(0)
+  // Photo-level selection, separate from selFaces. A face and the photo it
+  // came from are different things to act on: detaching a face changes the
+  // grouping, deleting a photo removes the file. Sharing one selection between
+  // the two modes would make "Remove from this person" and "Delete" look like
+  // neighbours when one is reversible in a click and the other is a file
+  // operation.
+  const [selPhotos, setSelPhotos] = useState(() => new Set())
+  const [movePicker, setMovePicker] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1393,7 +1402,7 @@ function PeopleView({ onOpen, onItems }) {
   }, [status?.running])
 
   useEffect(() => {
-    if (!openId) { setGroupFaces([]); setSelFaces(new Set()); return }
+    if (!openId) { setGroupFaces([]); setSelFaces(new Set()); setSelPhotos(new Set()); return }
     fetch(`/api/people/faces?id=${encodeURIComponent(openId)}`, { credentials: 'same-origin' })
       .then(r => r.json()).then(d => setGroupFaces(d.faces || [])).catch(() => setGroupFaces([]))
   }, [openId, groupVersion])
@@ -1492,6 +1501,30 @@ function PeopleView({ onOpen, onItems }) {
     }
     await post('/api/people/assign', body)
     setSelFaces(new Set())
+    setGroupVersion(v => v + 1)
+  }
+
+  // Acting on the photos themselves. The point is to fix what you notice while
+  // auditing — a duplicate, a stray shot — without leaving the group and
+  // hunting for the file in the library.
+  const movePhotos = async (destFolder) => {
+    const paths = [...selPhotos]
+    setMovePicker(false)
+    if (!paths.length) return
+    await post('/api/admin/batch/move', { paths, destFolder })
+    setSelPhotos(new Set())
+    setGroupVersion(v => v + 1)
+  }
+
+  // Delete is the recycle bin, not an unlink: the server moves the file to
+  // Trash, so a misjudged face can be put back. The faces go with it, which is
+  // why the group has to be refetched rather than patched locally.
+  const deletePhotos = async () => {
+    const paths = [...selPhotos]
+    setConfirmDelete(false)
+    if (!paths.length) return
+    await post('/api/admin/batch/delete', { paths })
+    setSelPhotos(new Set())
     setGroupVersion(v => v + 1)
   }
 
@@ -1630,7 +1663,9 @@ function PeopleView({ onOpen, onItems }) {
             <span className="memories-sub">
               {selFaces.size
                 ? `${selFaces.size} of ${groupFaces.length} selected`
-                : `${groupPhotos.length} photo${groupPhotos.length === 1 ? '' : 's'} · ${groupFaces.length} face${groupFaces.length === 1 ? '' : 's'}`}
+                : selPhotos.size
+                  ? `${selPhotos.size} of ${groupPhotos.length} selected`
+                  : `${groupPhotos.length} photo${groupPhotos.length === 1 ? '' : 's'} · ${groupFaces.length} face${groupFaces.length === 1 ? '' : 's'}`}
             </span>
             {/* Crops to judge identity by, whole frames to judge context by.
                 Both are needed: a face alone often isn't enough to tell a
@@ -1646,7 +1681,7 @@ function PeopleView({ onOpen, onItems }) {
                   // per-face actions aren't reachable from the photo grid, and
                   // an invisible selection driving a visible action bar is how
                   // you detach the wrong faces.
-                  onClick={() => { setMode(val); if (val !== 'faces') setSelFaces(new Set()) }}
+                  onClick={() => { setMode(val); if (val !== 'faces') setSelFaces(new Set()); if (val !== 'photos') setSelPhotos(new Set()) }}
                 >{label}</button>
               ))}
             </div>
@@ -1654,6 +1689,11 @@ function PeopleView({ onOpen, onItems }) {
               <button className="trash-select-btn" onClick={() =>
                 setSelFaces(selFaces.size === groupFaces.length ? new Set() : new Set(groupFaces.map(f => f.id)))
               }>{selFaces.size === groupFaces.length ? 'Clear' : 'Select all'}</button>
+            )}
+            {token && mode === 'photos' && groupPhotos.length > 0 && (
+              <button className="trash-select-btn" onClick={() =>
+                setSelPhotos(selPhotos.size === groupPhotos.length ? new Set() : new Set(groupPhotos.map(it => it.path)))
+              }>{selPhotos.size === groupPhotos.length ? 'Clear' : 'Select all'}</button>
             )}
             <button className="trash-select-btn" onClick={() => setOpenId(null)}>Close</button>
           </div>
@@ -1664,11 +1704,18 @@ function PeopleView({ onOpen, onItems }) {
           {mode === 'photos' && (
             <div className="memories-grid">
               {groupPhotos.map(it => (
-                <button key={it.path} className="memories-cell" title={it.path}
-                  onClick={() => onOpen({ name: it.name, path: it.path, isVideo: false })}>
+                <button
+                  key={it.path}
+                  className={`memories-cell ${selPhotos.has(it.path) ? 'photo-cell-sel' : ''}`}
+                  title={token ? `${it.path} — click to select, double-click to open` : it.path}
+                  onClick={() => token
+                    ? setSelPhotos(prev => { const n = new Set(prev); n.has(it.path) ? n.delete(it.path) : n.add(it.path); return n })
+                    : onOpen({ name: it.name, path: it.path, isVideo: false })}
+                  onDoubleClick={() => onOpen({ name: it.name, path: it.path, isVideo: false })}>
                   <img src={`/api/thumb?path=${encodeURIComponent(it.path)}`} alt={it.name} loading="lazy" />
                   {it.taken > 0 && <span className="face-photo-date">{new Date(it.taken * 1000).toLocaleDateString()}</span>}
                   {it.faces > 1 && <span className="face-photo-count" title={`${it.faces} faces in this photo were grouped here`}>{it.faces}×</span>}
+                  {selPhotos.has(it.path) && <span className="face-tick">✓</span>}
                 </button>
               ))}
             </div>
@@ -1718,8 +1765,39 @@ function PeopleView({ onOpen, onItems }) {
               </button>
             </div>
           )}
+
+          {/* Photo actions. Deliberately a different bar from the face one:
+              these act on files, not on the grouping. */}
+          {token && mode === 'photos' && selPhotos.size > 0 && (
+            <div className="trash-selbar">
+              <button className="sel-bar-close" onClick={() => setSelPhotos(new Set())} title="Clear"><CloseIcon size={14} /></button>
+              <span className="sel-bar-count">{selPhotos.size} photo{selPhotos.size === 1 ? '' : 's'}</span>
+              <button className="sel-bar-action" onClick={() => setMovePicker(true)}>Move to…</button>
+              <button className="sel-bar-action sel-bar-danger" onClick={() => setConfirmDelete(true)}>
+                Delete
+              </button>
+            </div>
+          )}
           </div>
           </div>
+          {movePicker && (
+            <FolderPicker
+              title="Move to…"
+              confirmLabel="Move here"
+              onConfirm={movePhotos}
+              onClose={() => setMovePicker(false)}
+            />
+          )}
+
+          {confirmDelete && (
+            <ConfirmDialog
+              title={`Delete ${selPhotos.size} photo${selPhotos.size === 1 ? '' : 's'}?`}
+              body={`${selPhotos.size === 1 ? 'It goes' : 'They go'} to the Recycle Bin, and can be restored from there. ${selPhotos.size === 1 ? 'The face in it leaves' : 'The faces in them leave'} this person too.`}
+              confirmLabel="Delete"
+              onConfirm={deletePhotos}
+              onClose={() => setConfirmDelete(false)}
+            />
+          )}
         </div>,
         document.body
       )}
@@ -3250,7 +3328,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.28.2'
+const APP_VERSION = '2.29.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

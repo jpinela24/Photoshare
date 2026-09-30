@@ -4179,6 +4179,10 @@ body {
 }
 .face-cell { position: relative; }
 .face-cell-sel .memories-cell { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+/* A selected photo in the group's Photos grid. Same treatment as a selected
+   face, so the two modes read the same even though they act on different
+   things. */
+.photo-cell-sel { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
 .face-pick { position: absolute; top: 6px; left: 6px; z-index: 2; }
 
 @media (max-width: 768px) {
