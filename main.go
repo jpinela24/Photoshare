@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.29.0"
+const appVersion = "2.29.1"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -3660,19 +3660,42 @@ func trashAutoPurger() {
 // fileDate returns a file's best-known capture date: EXIF DateTimeOriginal for
 // JPEG/PNG/etc., falling back to the filesystem modification time.
 func fileDate(path string, info os.FileInfo) time.Time {
-	name := info.Name()
-	if isImage(name) && !isHeic(name) {
-		if f, err := os.Open(path); err == nil {
-			if x, derr := exif.Decode(f); derr == nil {
-				if t, terr := x.DateTime(); terr == nil && !t.IsZero() {
-					f.Close()
-					return t
-				}
-			}
-			f.Close()
+	if x := decodeExif(path, info.Name()); x != nil {
+		if t, err := x.DateTime(); err == nil && !t.IsZero() {
+			return t
 		}
 	}
 	return info.ModTime()
+}
+
+// decodeExif reads a photo's EXIF, whatever container it is in. JPEG and
+// friends carry it inline, so goexif reads the file directly; HEIC hides it in
+// an ISO-BMFF item and needs the container walked first.
+//
+// Returns nil whenever there is nothing to read — no EXIF, an unreadable file,
+// a format that never has any. Callers fall back to the filesystem timestamp,
+// which is what the whole library did for HEIC before this existed.
+func decodeExif(path, name string) *exif.Exif {
+	if !isImage(name) {
+		return nil
+	}
+	if isHeic(name) {
+		x, err := heicExif(path)
+		if err != nil {
+			return nil
+		}
+		return x
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	x, err := exif.Decode(f)
+	if err != nil {
+		return nil
+	}
+	return x
 }
 
 // ── Auto-sort the upload inbox into Year/Month folders ───────────────────────
@@ -3753,19 +3776,15 @@ type datedFile struct {
 // fileDateGeo decodes EXIF once to extract both capture date and GPS coords.
 func fileDateGeo(path string, info os.FileInfo) (when time.Time, lat, lng float64, hasGeo bool) {
 	when = info.ModTime()
-	name := info.Name()
-	if isImage(name) && !isHeic(name) {
-		if f, err := os.Open(path); err == nil {
-			if x, derr := exif.Decode(f); derr == nil {
-				if t, terr := x.DateTime(); terr == nil && !t.IsZero() {
-					when = t
-				}
-				if la, lo, gerr := x.LatLong(); gerr == nil && (la != 0 || lo != 0) {
-					lat, lng, hasGeo = la, lo, true
-				}
-			}
-			f.Close()
-		}
+	x := decodeExif(path, info.Name())
+	if x == nil {
+		return
+	}
+	if t, err := x.DateTime(); err == nil && !t.IsZero() {
+		when = t
+	}
+	if la, lo, err := x.LatLong(); err == nil && (la != 0 || lo != 0) {
+		lat, lng, hasGeo = la, lo, true
 	}
 	return
 }

@@ -3328,7 +3328,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.29.0'
+const APP_VERSION = '2.29.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
