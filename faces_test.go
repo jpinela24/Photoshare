@@ -179,7 +179,7 @@ func TestMergeKeepsEveryFaceAndSticks(t *testing.T) {
 		t.Fatalf("expected two separate groups, got %q and %q", g1, g2)
 	}
 
-	if err := mergePeople([]string{g1, g2}); err != nil {
+	if _, err := mergePeople([]string{g1, g2}); err != nil {
 		t.Fatal(err)
 	}
 	merged := personOf("young0")

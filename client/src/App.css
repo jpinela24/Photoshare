@@ -4228,6 +4228,7 @@ body {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .suggest-meta { font-size: 0.68rem; color: var(--gtext-faint); text-align: center; }
+.suggest-name-input { width: 100%; font-size: 0.82rem; padding: 6px 9px; }
 .suggest-actions { display: flex; gap: 8px; }
 .suggest-actions > * { flex: 1 1 0; justify-content: center; }
 .suggest-actions button:disabled { opacity: 0.6; cursor: default; }

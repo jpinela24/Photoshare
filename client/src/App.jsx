@@ -1385,6 +1385,9 @@ function PeopleView({ onOpen, onItems }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [busySuggestion, setBusySuggestion] = useState(null)
+  // Name typed on a suggestion card, keyed by pair. Optional: merging without
+  // one is still allowed, it just leaves the result unnamed as before.
+  const [suggestNames, setSuggestNames] = useState({})
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1513,12 +1516,42 @@ function PeopleView({ onOpen, onItems }) {
     setGroupVersion(v => v + 1)
   }
 
+  // Merge, and name the result in the same step. Merging promotes the survivor
+  // to a new id, so the name has to be applied to what the server reports back,
+  // not to either of the ids we sent.
   const acceptSuggestion = async (sg) => {
-    setBusySuggestion(`${sg.a}|${sg.b}`)
-    await post('/api/people/merge', { ids: [sg.a, sg.b] })
+    const key = `${sg.a}|${sg.b}`
+    const name = (suggestNames[key] ?? defaultSuggestName(sg)).trim()
+    setBusySuggestion(key)
+    const r = await adminFetch('/api/people/merge', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [sg.a, sg.b] }),
+    })
+    let mergedId = null
+    try { mergedId = (await r.json()).id } catch {}
+
+    // Only name when the user actually asked for one, and skip it when the
+    // merge already carried that name across from one of the two sides.
+    if (mergedId && name && name !== sg.aName && name !== sg.bName) {
+      const nr = await adminFetch('/api/people/name', token, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: mergedId, name }),
+      })
+      // Someone of that name already exists: the server won't guess, and the
+      // existing prompt already handles the question properly.
+      if (nr.status === 409) {
+        const { conflict } = await nr.json()
+        setMergePrompt({ id: mergedId, name, other: conflict })
+      }
+    }
+    setSuggestNames(prev => { const n = { ...prev }; delete n[key]; return n })
+    await loadPeople()
     await loadSuggestions()
     setBusySuggestion(null)
   }
+
+  // If one side is already named, that name is almost certainly the answer.
+  const defaultSuggestName = (sg) => sg.aName || sg.bName || ''
 
   const rejectSuggestion = async (sg) => {
     setBusySuggestion(`${sg.a}|${sg.b}`)
@@ -1646,6 +1679,17 @@ function PeopleView({ onOpen, onItems }) {
                       </div>
                     ))}
                   </div>
+                  {/* Naming here saves finding the merged group afterwards,
+                      which is the whole reason you were merging. Optional —
+                      leave it blank and the result is unnamed, as before. */}
+                  <input
+                    className="adm-input suggest-name-input"
+                    value={suggestNames[`${sg.a}|${sg.b}`] ?? defaultSuggestName(sg)}
+                    placeholder="Name them (optional)"
+                    disabled={busy}
+                    onChange={e => setSuggestNames(prev => ({ ...prev, [`${sg.a}|${sg.b}`]: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Enter') acceptSuggestion(sg) }}
+                  />
                   <div className="suggest-actions">
                     <button className="sel-bar-action" disabled={busy} onClick={() => acceptSuggestion(sg)}>
                       Same person
@@ -3405,7 +3449,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.30.0'
+const APP_VERSION = '2.30.1'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

@@ -826,9 +826,14 @@ func namePerson(id, name string, merge bool) error {
 // mergePeople folds several groups into the first one. This is the operation
 // that makes different ages work: the merged person keeps every face from every
 // group, and later matching runs against all of them.
-func mergePeople(ids []string) error {
+// mergePeople folds several groups into one and returns the surviving id.
+//
+// The id is returned because merging promotes the survivor out of the
+// automatic namespace, so the caller's "c:4" no longer exists afterwards —
+// without this, naming the result means guessing which group it became.
+func mergePeople(ids []string) (string, error) {
 	if len(ids) < 2 {
-		return fmt.Errorf("need at least two groups")
+		return "", fmt.Errorf("need at least two groups")
 	}
 	faceMu.Lock()
 	defer faceMu.Unlock()
@@ -836,12 +841,12 @@ func mergePeople(ids []string) error {
 
 	target := faces.Persons[ids[0]]
 	if target == nil {
-		return fmt.Errorf("no such group")
+		return "", fmt.Errorf("no such group")
 	}
 	keep := map[string]bool{}
 	for _, id := range ids[1:] {
 		if faces.Persons[id] == nil {
-			return fmt.Errorf("no such group: %s", id)
+			return "", fmt.Errorf("no such group: %s", id)
 		}
 		keep[id] = true
 	}
@@ -864,9 +869,9 @@ func mergePeople(ids []string) error {
 	for id := range keep {
 		delete(faces.Persons, id)
 	}
-	promoteLocked(target.ID) // a merge is a decision; give it a stable id
+	final := promoteLocked(target.ID) // a merge is a decision; give it a stable id
 	saveFacesLocked()
-	return nil
+	return final, nil
 }
 
 // assignFaces moves faces to a person, by id or by name.
@@ -1132,11 +1137,14 @@ func peopleMergeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := mergePeople(body.IDs); err != nil {
+	id, err := mergePeople(body.IDs)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	// The surviving id, so the caller can name what it just created.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": id})
 }
 
 // POST /api/people/detach  {"faceIds":[...]} — "that isn't them".

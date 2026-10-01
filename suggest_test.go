@@ -297,3 +297,46 @@ func TestSuggestMergesHandlesEmptyAndTiny(t *testing.T) {
 	withFaceStore(t, st)
 	_ = suggestMerges(10) // must not panic
 }
+
+// Merging promotes the survivor to a new id, so a caller that wants to name the
+// result has to be told what it became. Returning the id the caller sent, or
+// nothing at all, means the name lands on a group that no longer exists.
+func TestMergeReturnsTheSurvivingIDAndItIsNameable(t *testing.T) {
+	st := newStore()
+	addGroup(st, "c:1", false, 11, 5, sameAge)
+	addGroup(st, "c:2", false, 11, 5, sameAge)
+	withFaceStore(t, st)
+
+	id, err := mergePeople([]string{"c:1", "c:2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" {
+		t.Fatal("merge reported no id — the caller cannot name what it just created")
+	}
+	faceMu.Lock()
+	p := faces.Persons[id]
+	faceMu.Unlock()
+	if p == nil {
+		t.Fatalf("merge reported id %q, which is not a group that exists", id)
+	}
+
+	// The name has to stick to the merged person, and carry all the faces.
+	if err := namePerson(id, "Ana", false); err != nil {
+		t.Fatalf("naming the merged group: %v", err)
+	}
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	n := 0
+	for _, f := range faces.Faces {
+		if f.Person == id {
+			n++
+		}
+	}
+	if n != 10 {
+		t.Errorf("merged person holds %d faces, want all 10", n)
+	}
+	if got := faces.Persons[id]; got == nil || got.Name != "Ana" || !got.Named {
+		t.Errorf("merged person = %+v, want a named Ana", got)
+	}
+}
