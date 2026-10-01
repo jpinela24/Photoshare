@@ -397,13 +397,50 @@ func semanticSearchHandler(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
 		limit = n
 	}
-	results, err := aiSearch(q, limit)
+	// Named people first, here too. CLIP matches images by what is in them,
+	// and a person's name means nothing to it — so in Smart mode a name you
+	// assigned yourself used to return whatever the model free-associated to
+	// the word instead of that person's photos. Naming a face is an explicit
+	// statement of fact about a photo, and it should outrank a guess.
+	results := []SearchEntry{}
+	seen := map[string]bool{}
+	for _, rel := range photosOfNamedPeople(q) {
+		if len(results) >= searchPersonCap {
+			break
+		}
+		full, err := safePath(baseDir, rel)
+		if err != nil {
+			continue
+		}
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue // deleted since the last scan
+		}
+		name := info.Name()
+		parent := filepath.ToSlash(filepath.Dir(rel))
+		if parent == "." {
+			parent = ""
+		}
+		seen[rel] = true
+		results = append(results, SearchEntry{Name: name, Path: rel, Parent: parent, IsVideo: isVideo(name)})
+	}
+
+	found, err := aiSearch(q, limit)
 	if err != nil {
+		// A person match is still a good answer on its own, so don't throw it
+		// away because the model is unreachable.
+		if len(results) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(results)
+			return
+		}
 		http.Error(w, "search failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if results == nil {
-		results = []SearchEntry{}
+	for _, e := range found {
+		if !seen[e.Path] {
+			results = append(results, e)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)

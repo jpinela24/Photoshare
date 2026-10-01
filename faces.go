@@ -1561,3 +1561,56 @@ func peopleDismissSuggestionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
+
+// photosOfNamedPeople returns the library-relative paths of photos containing
+// someone whose name matches q, best-known first.
+//
+// Only named people: an automatic group has no name to search for, and
+// matching on "c:4" would be noise.
+//
+// Paths come back deduplicated — one photo can hold several faces of the same
+// person, and more than one matching person can appear in the same photo.
+func photosOfNamedPeople(q string) []string {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return nil
+	}
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+
+	match := map[string]bool{}
+	for id, p := range faces.Persons {
+		if p.Named && p.Name != "" && strings.Contains(strings.ToLower(p.Name), q) {
+			match[id] = true
+		}
+	}
+	if len(match) == 0 {
+		return nil
+	}
+
+	// Newest first, which is the order the rest of the app shows photos in.
+	var hits []*Face
+	for _, f := range faces.Faces {
+		if match[f.Person] {
+			hits = append(hits, f)
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Taken != hits[j].Taken {
+			return hits[i].Taken > hits[j].Taken
+		}
+		return hits[i].ID < hits[j].ID
+	})
+
+	seen := map[string]bool{}
+	out := make([]string, 0, len(hits))
+	for _, f := range hits {
+		if seen[f.Path] {
+			continue
+		}
+		seen[f.Path] = true
+		out = append(out, f.Path)
+	}
+	return out
+}

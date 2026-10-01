@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.30.1"
+const appVersion = "2.31.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2204,6 +2204,11 @@ func openFolderHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// searchPersonCap bounds how many of a person's photos one search returns.
+// High enough that "Ana" means all of Ana in any normal library, low enough
+// that the response stays a few hundred KB.
+const searchPersonCap = 500
+
 func searchHandler(w http.ResponseWriter, r *http.Request) {
 	q        := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	typeFilter := r.URL.Query().Get("type") // "image" | "video" | ""
@@ -2221,6 +2226,53 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var results []SearchEntry
+	// Already-matched paths, so a photo found by name isn't listed again when
+	// the filename walk reaches it.
+	seen := map[string]bool{}
+
+	// People first. Naming a face is the most deliberate thing you can tell
+	// this app about a photo, so when the query is someone's name those photos
+	// outrank an incidental filename match — and the filename walk would never
+	// find them anyway, since a camera does not put names in filenames.
+	//
+	// These come from the in-memory face index, so there is no extra walk; the
+	// cap is higher than the filename cap because "show me Ana" reasonably
+	// means all of her, not the first handful.
+	if q != "" {
+		for _, rel := range photosOfNamedPeople(q) {
+			if len(results) >= searchPersonCap {
+				break
+			}
+			full, err := safePath(baseDir, rel)
+			if err != nil {
+				continue
+			}
+			info, err := os.Lstat(full)
+			if err != nil || !info.Mode().IsRegular() {
+				continue // deleted since the last scan
+			}
+			name := info.Name()
+			if typeFilter == "image" && !isImage(name) {
+				continue
+			}
+			if typeFilter == "video" && !isVideo(name) {
+				continue
+			}
+			if !fromTime.IsZero() && info.ModTime().Before(fromTime) {
+				continue
+			}
+			if !toTime.IsZero() && info.ModTime().After(toTime) {
+				continue
+			}
+			parent := filepath.ToSlash(filepath.Dir(rel))
+			if parent == "." {
+				parent = ""
+			}
+			seen[rel] = true
+			results = append(results, SearchEntry{Name: name, Path: rel, Parent: parent, IsVideo: isVideo(name)})
+		}
+	}
+
 	filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -2246,6 +2298,9 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		if !toTime.IsZero()   && info.ModTime().After(toTime)    { return nil }
 		rel, _ := filepath.Rel(baseDir, path)
 		rel = filepath.ToSlash(rel)
+		if seen[rel] {
+			return nil // already listed as a person match
+		}
 		parent := filepath.ToSlash(filepath.Dir(rel))
 		if parent == "." {
 			parent = ""
@@ -2255,7 +2310,10 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		} else if isImage(name) || isVideo(name) {
 			results = append(results, SearchEntry{Name: name, Path: rel, Parent: parent, IsVideo: isVideo(name)})
 		}
-		if len(results) >= 60 {
+		// The filename half stops at 60 as before; person matches are counted
+		// separately so a well-named person can't be crowded out, and a
+		// filename sweep can't balloon the response.
+		if len(results)-len(seen) >= 60 {
 			return filepath.SkipAll
 		}
 		return nil
