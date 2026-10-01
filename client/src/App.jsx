@@ -1383,6 +1383,8 @@ function PeopleView({ onOpen, onItems }) {
   const [selPhotos, setSelPhotos] = useState(() => new Set())
   const [movePicker, setMovePicker] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const [busySuggestion, setBusySuggestion] = useState(null)
   const [nameText, setNameText] = useState('')
 
   const loadPeople = () =>
@@ -1393,12 +1395,19 @@ function PeopleView({ onOpen, onItems }) {
     fetch('/api/faces/status', { credentials: 'same-origin' })
       .then(r => r.json()).then(setStatus).catch(() => {})
 
-  useEffect(() => { loadPeople(); loadStatus() }, [])
+  // Groups that look like the same person. The server declines to compute
+  // these while a scan is running, since the grouping is still moving.
+  const loadSuggestions = () =>
+    fetch('/api/people/suggestions', { credentials: 'same-origin' })
+      .then(r => r.json()).then(d => setSuggestions(d.suggestions || [])).catch(() => setSuggestions([]))
+
+  useEffect(() => { loadPeople(); loadStatus(); loadSuggestions() }, [])
   // Poll only while a scan is running, so the view is quiet at rest.
   useEffect(() => {
     if (!status?.running) return
     const iv = setInterval(() => { loadStatus(); loadPeople() }, 4000)
-    return () => clearInterval(iv)
+    // A finished scan regroups everything, so the old suggestions are stale.
+    return () => { clearInterval(iv); loadSuggestions() }
   }, [status?.running])
 
   useEffect(() => {
@@ -1504,6 +1513,23 @@ function PeopleView({ onOpen, onItems }) {
     setGroupVersion(v => v + 1)
   }
 
+  const acceptSuggestion = async (sg) => {
+    setBusySuggestion(`${sg.a}|${sg.b}`)
+    await post('/api/people/merge', { ids: [sg.a, sg.b] })
+    await loadSuggestions()
+    setBusySuggestion(null)
+  }
+
+  const rejectSuggestion = async (sg) => {
+    setBusySuggestion(`${sg.a}|${sg.b}`)
+    await adminFetch('/api/people/suggestions/dismiss', token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a: sg.a, b: sg.b }),
+    })
+    await loadSuggestions()
+    setBusySuggestion(null)
+  }
+
   // Acting on the photos themselves. The point is to fix what you notice while
   // auditing — a duplicate, a stray shot — without leaving the group and
   // hunting for the file in the library.
@@ -1581,6 +1607,57 @@ function PeopleView({ onOpen, onItems }) {
       {!people.length && !status?.running && (
         <div className="status muted">
           No groups yet. {status?.scanned ? 'Nothing was grouped — faces need to appear in at least ' + (status.minGroup || 3) + ' photos.' : 'Run a scan to get started.'}
+        </div>
+      )}
+
+      {/* Suggested merges. The clusterer splits one person across ages on
+          purpose — a threshold loose enough to bridge a childhood merges
+          strangers instead — so the gap is closed here, by showing two faces
+          and letting you decide. Nothing merges on its own. */}
+      {token && suggestions.length > 0 && (
+        <div className="suggest-wrap">
+          <div className="memories-head suggest-head">
+            <h3 className="trash-title">Same person?</h3>
+            <span className="memories-sub">
+              {suggestions.length} pair{suggestions.length === 1 ? ' looks' : 's look'} alike
+            </span>
+          </div>
+          <div className="suggest-list">
+            {suggestions.map(sg => {
+              const busy = busySuggestion === `${sg.a}|${sg.b}`
+              return (
+                <div key={`${sg.a}|${sg.b}`} className={`suggest-card ${busy ? 'suggest-busy' : ''}`}>
+                  <div className="suggest-faces">
+                    {[['a', sg.aCover, sg.aName, sg.aCount, sg.aYears],
+                      ['b', sg.bCover, sg.bName, sg.bCount, sg.bYears]].map(([k, cover, name, count, years]) => (
+                      <div key={k} className="suggest-side">
+                        <button
+                          className="suggest-face"
+                          title="Open this group"
+                          onClick={() => setOpenId(k === 'a' ? sg.a : sg.b)}
+                        >
+                          <img src={`/api/faces/crop?id=${encodeURIComponent(cover)}&size=160`} alt="" loading="lazy" />
+                        </button>
+                        <span className={`suggest-name ${name ? '' : 'person-unnamed'}`}>{name || 'Unnamed'}</span>
+                        {/* The date spans are usually what settles it: two faces
+                            can look alike, but the years tell you whether it can
+                            be the same child. */}
+                        <span className="suggest-meta">{count} photo{count === 1 ? '' : 's'}{years ? ` · ${years}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="suggest-actions">
+                    <button className="sel-bar-action" disabled={busy} onClick={() => acceptSuggestion(sg)}>
+                      Same person
+                    </button>
+                    <button className="trash-select-btn" disabled={busy} onClick={() => rejectSuggestion(sg)}>
+                      Not the same
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
@@ -3328,7 +3405,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.29.1'
+const APP_VERSION = '2.30.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //

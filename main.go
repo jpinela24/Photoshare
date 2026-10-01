@@ -945,7 +945,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.29.1"
+const appVersion = "2.30.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -4754,6 +4754,8 @@ func main() {
 	mux.HandleFunc("/api/faces/crop", protected(getOnly(faceCropHandler)))
 	mux.HandleFunc("/api/people", protected(getOnly(peopleListHandler)))
 	mux.HandleFunc("/api/people/faces", protected(getOnly(peopleFacesHandler)))
+	mux.HandleFunc("/api/people/suggestions", protected(getOnly(peopleSuggestionsHandler)))
+	mux.HandleFunc("/api/people/suggestions/dismiss", withCORS(mutate(http.MethodPost, peopleDismissSuggestionHandler)))
 	mux.HandleFunc("/api/faces/scan", withCORS(mutate(http.MethodPost, facesScanHandler)))
 	mux.HandleFunc("/api/people/name", withCORS(mutate(http.MethodPost, peopleNameHandler)))
 	mux.HandleFunc("/api/people/merge", withCORS(mutate(http.MethodPost, peopleMergeHandler)))

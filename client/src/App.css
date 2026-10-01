@@ -4190,6 +4190,52 @@ body {
   .person-cover { width: 76px; height: 76px; }
 }
 
+/* ── Merge suggestions ───────────────────────────────────────────────────── */
+/* Two faces side by side, close enough together to compare in one glance —
+   the whole judgement is "is that the same child", and eyes moving between
+   distant thumbnails make that harder than it needs to be. */
+.suggest-wrap {
+  margin: 4px 0 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.suggest-head { margin-bottom: 12px; }
+.suggest-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.suggest-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass);
+  transition: opacity 0.15s ease;
+}
+.suggest-busy { opacity: 0.5; pointer-events: none; }
+.suggest-faces { display: flex; gap: 10px; }
+.suggest-side { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: center; }
+.suggest-face {
+  width: 100%; aspect-ratio: 1;
+  padding: 0; border: 1px solid var(--glass-border); border-radius: 12px;
+  overflow: hidden; background: var(--glass-2); cursor: pointer;
+}
+.suggest-face:hover { border-color: var(--accent-strong); }
+.suggest-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.suggest-name {
+  font-size: 0.8rem; font-weight: 600; color: var(--gtext);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.suggest-meta { font-size: 0.68rem; color: var(--gtext-faint); text-align: center; }
+.suggest-actions { display: flex; gap: 8px; }
+.suggest-actions > * { flex: 1 1 0; justify-content: center; }
+.suggest-actions button:disabled { opacity: 0.6; cursor: default; }
+
+@media (max-width: 768px) {
+  .suggest-list { grid-template-columns: 1fr; }
+}
+
 /* ── Face review ─────────────────────────────────────────────────────────── */
 /* Bigger than the group covers on purpose: this is where you decide whether a
    face really is that person, and 160px isn't enough to decide by. */

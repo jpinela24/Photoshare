@@ -9,6 +9,7 @@ import (
 	"image"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -53,6 +54,17 @@ const (
 	// Below this a cluster is noise (one blurry background face), not a person
 	// worth showing. They stay in the store and can still be searched.
 	faceMinClusterSize = 3
+	// Suggesting a merge, which is a much weaker claim than making one: the
+	// user looks at two faces and decides. Sits between "different people"
+	// (below ~0.35) and the 0.60 that would have merged them automatically,
+	// so it surfaces exactly the gap the clusterer leaves — one person split
+	// across ages — without dragging in strangers.
+	faceSuggestThreshold = 0.45
+	// Faces sampled per group when scoring a pair properly. All of them would
+	// be O(|A|x|B|) against groups that run to thousands of faces.
+	faceSuggestSample = 24
+	// Pairs kept from the cheap centroid pass for that proper scoring.
+	faceSuggestShortlist = 250
 )
 
 type Face struct {
@@ -88,6 +100,11 @@ type faceStore struct {
 	// and an untouched one never is.
 	Seen   map[string]faceSeen
 	NextID int
+	// Dismissed remembers "these two are not the same person", keyed by a pair
+	// of face ids rather than group ids: unnamed groups are deleted and
+	// renumbered on every clustering pass, so a dismissal keyed on c:3 would
+	// silently come to mean a different pair of people. Faces outlive that.
+	Dismissed map[string]bool
 }
 
 var (
@@ -132,6 +149,10 @@ func loadFacesLocked() {
 	}
 	if faces.Seen == nil {
 		faces.Seen = map[string]faceSeen{}
+	}
+	// Absent from any store written before suggestions existed.
+	if faces.Dismissed == nil {
+		faces.Dismissed = map[string]bool{}
 	}
 }
 
@@ -1221,4 +1242,314 @@ func sidecarHasFaces() bool {
 	}
 	faceHealth.ok = h.Faces
 	return h.Faces
+}
+
+// ── Merge suggestions ────────────────────────────────────────────────────────
+//
+// The clusterer splits one person across ages on purpose: ArcFace similarity
+// falls a long way over a childhood, and a threshold loose enough to bridge
+// that merges strangers instead. The cost is that a big library grows a tail
+// of groups that are the same person, and finding them means scrolling.
+//
+// Suggestions close that gap without loosening anything: pairs that are close
+// but not close enough to have been merged automatically are put in front of
+// the user, who decides. Nothing here changes the grouping on its own.
+
+type mergeSuggestion struct {
+	A      string  `json:"a"`
+	B      string  `json:"b"`
+	AName  string  `json:"aName"`
+	BName  string  `json:"bName"`
+	ACount int     `json:"aCount"`
+	BCount int     `json:"bCount"`
+	ACover string  `json:"aCover"`
+	BCover string  `json:"bCover"`
+	AYears string  `json:"aYears"`
+	BYears string  `json:"bYears"`
+	Score  float32 `json:"score"`
+}
+
+// pairKey orders a pair so that (a,b) and (b,a) are the same entry.
+func pairKey(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	return a + "|" + b
+}
+
+// yearSpan describes when a group's photos were taken, which is usually what
+// settles a suggestion: two faces can look alike, but "2011-2013" next to
+// "2019-2024" tells you whether it can be the same child.
+func yearSpan(members []*Face) string {
+	var lo, hi int64
+	for _, m := range members {
+		if m.Taken == 0 {
+			continue
+		}
+		if lo == 0 || m.Taken < lo {
+			lo = m.Taken
+		}
+		if m.Taken > hi {
+			hi = m.Taken
+		}
+	}
+	if lo == 0 {
+		return ""
+	}
+	a, b := time.Unix(lo, 0).Year(), time.Unix(hi, 0).Year()
+	if a == b {
+		return fmt.Sprintf("%d", a)
+	}
+	return fmt.Sprintf("%d–%d", a, b)
+}
+
+// centroid averages a group's embeddings and renormalises.
+//
+// Used only to shortlist candidate pairs cheaply. Scoring on a centroid alone
+// would repeat the mistake clusterFaces warns about: averaging a person across
+// several ages produces a vector that matches none of them.
+func centroid(members []*Face) []float32 {
+	if len(members) == 0 {
+		return nil
+	}
+	dim := len(members[0].Emb)
+	if dim == 0 {
+		return nil
+	}
+	sum := make([]float32, dim)
+	for _, m := range members {
+		if len(m.Emb) != dim {
+			continue
+		}
+		for i, v := range m.Emb {
+			sum[i] += v
+		}
+	}
+	var norm float32
+	for _, v := range sum {
+		norm += v * v
+	}
+	if norm == 0 {
+		return nil
+	}
+	norm = float32(math.Sqrt(float64(norm)))
+	for i := range sum {
+		sum[i] /= norm
+	}
+	return sum
+}
+
+// bestPairSimilarity is the closest any face in one group comes to any face in
+// the other — the same max-over-members rule the clusterer uses, rather than a
+// centroid, so a suggestion means "these two faces really do look alike" and
+// not "these two averages do".
+//
+// Both sides are sampled by detector confidence: the clearest faces are the
+// ones worth comparing, and it keeps a pair of 3,000-face groups from costing
+// nine million comparisons.
+func bestPairSimilarity(a, b []*Face) float32 {
+	sa, sb := sampleFaces(a), sampleFaces(b)
+	var best float32
+	for _, x := range sa {
+		for _, y := range sb {
+			if s := cosine(x.Emb, y.Emb); s > best {
+				best = s
+			}
+		}
+	}
+	return best
+}
+
+// sampleFaces takes the highest-confidence faces from a group.
+func sampleFaces(m []*Face) []*Face {
+	if len(m) <= faceSuggestSample {
+		return m
+	}
+	cp := append([]*Face(nil), m...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i].Score > cp[j].Score })
+	return cp[:faceSuggestSample]
+}
+
+// suggestMerges returns groups that look like the same person, best first.
+func suggestMerges(limit int) []mergeSuggestion {
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+
+	members := map[string][]*Face{}
+	for _, f := range faces.Faces {
+		if f.Person == "" {
+			continue
+		}
+		members[f.Person] = append(members[f.Person], f)
+	}
+
+	// Resolve dismissals to whatever groups hold those faces now. A pass of
+	// re-clustering may have moved them, in which case the decision follows
+	// the faces rather than being lost with the old group ids.
+	dismissed := map[string]bool{}
+	for key := range faces.Dismissed {
+		fa, fb, ok := strings.Cut(key, "|")
+		if !ok {
+			continue
+		}
+		x, y := faces.Faces[fa], faces.Faces[fb]
+		if x == nil || y == nil || x.Person == "" || y.Person == "" {
+			continue
+		}
+		dismissed[pairKey(x.Person, y.Person)] = true
+	}
+
+	ids := make([]string, 0, len(members))
+	cents := map[string][]float32{}
+	for id, m := range members {
+		if faces.Persons[id] == nil {
+			continue
+		}
+		if c := centroid(m); c != nil {
+			ids = append(ids, id)
+			cents[id] = c
+		}
+	}
+	sort.Strings(ids) // deterministic output for the same store
+
+	// Pass 1: centroids, to shortlist without comparing every face to every
+	// other face across the whole library.
+	type cand struct {
+		a, b string
+		s    float32
+	}
+	var shortlist []cand
+	for i := 0; i < len(ids); i++ {
+		for j := i + 1; j < len(ids); j++ {
+			a, b := ids[i], ids[j]
+			pa, pb := faces.Persons[a], faces.Persons[b]
+			// Both named means the user has already decided twice. Suggesting
+			// they are one person contradicts both decisions; the same-name
+			// merge prompt already covers the case where they agree.
+			if pa.Named && pb.Named {
+				continue
+			}
+			if dismissed[pairKey(a, b)] {
+				continue
+			}
+			shortlist = append(shortlist, cand{a, b, cosine(cents[a], cents[b])})
+		}
+	}
+	sort.Slice(shortlist, func(i, j int) bool { return shortlist[i].s > shortlist[j].s })
+	if len(shortlist) > faceSuggestShortlist {
+		shortlist = shortlist[:faceSuggestShortlist]
+	}
+
+	// Pass 2: score the shortlist properly.
+	out := make([]mergeSuggestion, 0, limit)
+	for _, c := range shortlist {
+		score := bestPairSimilarity(members[c.a], members[c.b])
+		if score < faceSuggestThreshold {
+			continue
+		}
+		ma, mb := members[c.a], members[c.b]
+		sort.Slice(ma, func(i, j int) bool { return ma[i].Score > ma[j].Score })
+		sort.Slice(mb, func(i, j int) bool { return mb[i].Score > mb[j].Score })
+		out = append(out, mergeSuggestion{
+			A: c.a, B: c.b,
+			AName: faces.Persons[c.a].Name, BName: faces.Persons[c.b].Name,
+			ACount: len(ma), BCount: len(mb),
+			ACover: ma[0].ID, BCover: mb[0].ID,
+			AYears: yearSpan(ma), BYears: yearSpan(mb),
+			Score: score,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+
+	// One group can look like several others; showing the same face in five
+	// rows makes the list feel longer than the work actually is.
+	seen := map[string]bool{}
+	kept := out[:0]
+	for _, s := range out {
+		if seen[s.A] || seen[s.B] {
+			continue
+		}
+		seen[s.A], seen[s.B] = true, true
+		kept = append(kept, s)
+		if len(kept) >= limit {
+			break
+		}
+	}
+	return kept
+}
+
+// dismissSuggestion records that two groups are not the same person.
+//
+// Stored against each group's clearest face, so the decision survives the
+// renumbering that every clustering pass does to unnamed groups.
+func dismissSuggestion(a, b string) error {
+	faceMu.Lock()
+	defer faceMu.Unlock()
+	loadFacesLocked()
+	if faces.Persons[a] == nil || faces.Persons[b] == nil {
+		return fmt.Errorf("no such group")
+	}
+	rep := func(id string) *Face {
+		var best *Face
+		for _, f := range faces.Faces {
+			if f.Person == id && (best == nil || f.Score > best.Score) {
+				best = f
+			}
+		}
+		return best
+	}
+	fa, fb := rep(a), rep(b)
+	if fa == nil || fb == nil {
+		return fmt.Errorf("group has no faces")
+	}
+	faces.Dismissed[pairKey(fa.ID, fb.ID)] = true
+	pruneDismissedLocked()
+	saveFacesLocked()
+	return nil
+}
+
+// pruneDismissedLocked drops entries whose faces have left the library, so the
+// list can't grow without bound as photos are deleted.
+func pruneDismissedLocked() {
+	for key := range faces.Dismissed {
+		fa, fb, ok := strings.Cut(key, "|")
+		if !ok || faces.Faces[fa] == nil || faces.Faces[fb] == nil {
+			delete(faces.Dismissed, key)
+		}
+	}
+}
+
+// GET /api/people/suggestions — pairs that look like the same person.
+func peopleSuggestionsHandler(w http.ResponseWriter, r *http.Request) {
+	// While a scan is running the groups are still moving, so anything
+	// computed here would be about to change.
+	faceIndex.mu.Lock()
+	running := faceIndex.running
+	faceIndex.mu.Unlock()
+
+	out := []mergeSuggestion{}
+	if !running {
+		out = suggestMerges(clampAtoi(r.URL.Query().Get("limit"), 12, 1, 50))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"suggestions": out, "scanning": running})
+}
+
+// POST /api/people/suggestions/dismiss  {"a":"c:3","b":"p:1"}
+func peopleDismissSuggestionHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct{ A, B string }
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := dismissSuggestion(body.A, body.B); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
