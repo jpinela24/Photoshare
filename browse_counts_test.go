@@ -76,7 +76,7 @@ func TestBrowseReportsFolderCounts(t *testing.T) {
 // Counting is best-effort: an unreadable folder must still list, just without
 // a caption. A listing is not worth failing over a count.
 func TestCountChildrenToleratesMissingDir(t *testing.T) {
-	p, v, f := countChildren(filepath.Join(t.TempDir(), "does-not-exist"))
+	p, v, f := countChildren(filepath.Join(t.TempDir(), "does-not-exist"), "", &privacyView{none: true})
 	if p != 0 || v != 0 || f != 0 {
 		t.Errorf("got %d/%d/%d, want zeros for a missing directory", p, v, f)
 	}

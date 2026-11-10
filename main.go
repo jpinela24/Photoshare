@@ -96,6 +96,10 @@ type AppConfig struct {
 	// NotifyURL is an optional webhook (ntfy, Discord, or any receiver) that
 	// PhotoShare POSTs to on events like new uploads. Empty = notifications off.
 	NotifyURL string `json:"notifyUrl,omitempty"`
+	// PrivateScope decides who can see items tagged "Only Me":
+	// "owner" (default) = only the account that tagged it, even other admins;
+	// "admin" = any admin account.
+	PrivateScope string `json:"privateScope,omitempty"`
 }
 
 // User is a login account. Role is "admin" (full) or "viewer" (view-only).
@@ -554,6 +558,9 @@ type Entry struct {
 	Photos  int `json:"photos,omitempty"`
 	Videos  int `json:"videos,omitempty"`
 	Folders int `json:"folders,omitempty"`
+	// Private marks an item tagged "Only Me". Only ever set for requesters
+	// allowed to see it — to everyone else the entry simply isn't in the list.
+	Private bool `json:"private,omitempty"`
 }
 
 var imageExts = map[string]bool{
@@ -763,7 +770,11 @@ func recoverMW(next http.Handler) http.Handler {
 // this size would turn every navigation into a full-tree walk. A folder of
 // folders therefore reports its subfolder count, not the photos inside them.
 // Errors are swallowed — a caption is not worth failing a listing over.
-func countChildren(dir string) (photos, videos, folders int) {
+// countChildren tallies what a folder card shows. rel is the folder's
+// library-relative path and v the requester's view, so items they may not see
+// aren't counted — otherwise a folder card would announce "12 photos" to
+// someone who can only open 9 of them.
+func countChildren(dir, rel string, v *privacyView) (photos, videos, folders int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0, 0, 0
@@ -771,6 +782,13 @@ func countChildren(dir string) (photos, videos, folders int) {
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		childRel := name
+		if rel != "" {
+			childRel = rel + "/" + name
+		}
+		if !v.canSee(childRel) {
 			continue
 		}
 		switch {
@@ -805,6 +823,7 @@ func browseHandler(w http.ResponseWriter, r *http.Request) {
 	// Names to always hide (case-insensitive)
 	trashRelName  := strings.ToLower(filepath.Base(trashDir))
 	uploadRelName := strings.ToLower(uploadDir)
+	priv := privacyFor(r)
 
 	for _, e := range dirEntries {
 		name := e.Name()
@@ -826,11 +845,17 @@ func browseHandler(w http.ResponseWriter, r *http.Request) {
 		if rel == "" {
 			entryRel = name
 		}
+		// "Only Me" items simply don't exist for anyone else.
+		if !priv.canSee(entryRel) {
+			continue
+		}
+		_, tagged := priv.taggedBy(entryRel)
 		if e.IsDir() {
-			photos, videos, folders := countChildren(filepath.Join(full, name))
+			photos, videos, folders := countChildren(filepath.Join(full, name), entryRel, priv)
 			result = append(result, Entry{
 				Name: name, Path: entryRel, IsDir: true,
 				Photos: photos, Videos: videos, Folders: folders,
+				Private: tagged,
 			})
 		} else if isImage(name) || isVideo(name) {
 			info, _ := e.Info()
@@ -842,7 +867,7 @@ func browseHandler(w http.ResponseWriter, r *http.Request) {
 			if info != nil {
 				mod = info.ModTime().Unix()
 			}
-			result = append(result, Entry{Name: name, Path: entryRel, IsVideo: isVideo(name), Size: size, Mod: mod})
+			result = append(result, Entry{Name: name, Path: entryRel, IsVideo: isVideo(name), Size: size, Mod: mod, Private: tagged})
 		}
 	}
 
@@ -897,7 +922,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			PhotoDir: baseDir, Port: port,
 			ShareName: shareName, ServerIP: serverIPFlag,
 			UploadFolder: uploadDir, FfmpegPath: ffmpegFlag, HTTPOnly: httpOnly, AutoSort: autoSort,
-			DisableWebUI: !lanAccess, NotifyURL: notifyURL,
+			DisableWebUI: !lanAccess, NotifyURL: notifyURL, PrivateScope: privateScope,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -926,6 +951,11 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "photo directory does not exist: "+cfg.PhotoDir, http.StatusBadRequest)
 			return
 		}
+		// Only two values are meaningful; anything else falls back to the
+		// stricter one rather than being stored and silently widening access.
+		if cfg.PrivateScope != "admin" {
+			cfg.PrivateScope = "owner"
+		}
 		// Accounts are managed via /api/users, not here — take them inside the
 		// transaction so a concurrent user change can't be overwritten by this
 		// save (and vice versa).
@@ -945,7 +975,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.31.0"
+const appVersion = "2.32.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -1447,11 +1477,17 @@ func trashListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var result []TrashEntry
+	priv := privacyFor(r)
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".trashinfo") {
 			continue
 		}
 		original, deletedAt := readTrashInfo(filepath.Join(trashDir, e.Name()))
+		// The tag is keyed by where the file used to live, so deleting an
+		// "Only Me" photo doesn't put it on display in everyone's recycle bin.
+		if original != "" && !priv.canSee(original) {
+			continue
+		}
 		info, _ := e.Info()
 		var size int64
 		if info != nil {
@@ -1479,6 +1515,9 @@ func trashThumbHandler(w http.ResponseWriter, r *http.Request) {
 	full := filepath.Join(trashDir, file)
 	if _, err := os.Stat(full); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if original, _ := readTrashInfo(full); original != "" && denyIfPrivate(w, r, original) {
 		return
 	}
 	thumbPath := cachePathFor(full, variantTrash)
@@ -1652,6 +1691,11 @@ func trashPurgeHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		full := filepath.Join(trashDir, name)
+		// Drop the "Only Me" tag with the file. Left behind, it would shadow a
+		// future file that happened to land on the same path.
+		if original, _ := readTrashInfo(full); original != "" {
+			forgetPrivate(original)
+		}
 		// RemoveAll reports success for a path that was never there, so check
 		// first — otherwise the count claims to have deleted things that did
 		// not exist.
@@ -1676,7 +1720,11 @@ func trashPurgeAllHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, _ := os.ReadDir(trashDir)
 	for _, e := range entries {
-		os.RemoveAll(filepath.Join(trashDir, e.Name()))
+		full := filepath.Join(trashDir, e.Name())
+		if original, _ := readTrashInfo(full); original != "" {
+			forgetPrivate(original)
+		}
+		os.RemoveAll(full)
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -2188,6 +2236,9 @@ func openFolderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	if denyIfPrivate(w, r, rel) {
+		return
+	}
 
 	var smbURL string
 	if shareName != "" {
@@ -2215,6 +2266,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	fromStr  := r.URL.Query().Get("from")  // YYYY-MM-DD
 	toStr    := r.URL.Query().Get("to")
 
+	priv := privacyFor(r)
 	var fromTime, toTime time.Time
 	if fromStr != "" { fromTime, _ = time.Parse("2006-01-02", fromStr) }
 	if toStr   != "" { toTime, _   = time.Parse("2006-01-02", toStr); toTime = toTime.Add(24*time.Hour) }
@@ -2268,6 +2320,9 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 			if parent == "." {
 				parent = ""
 			}
+			if !priv.canSee(rel) {
+				continue
+			}
 			seen[rel] = true
 			results = append(results, SearchEntry{Name: name, Path: rel, Parent: parent, IsVideo: isVideo(name)})
 		}
@@ -2301,6 +2356,12 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		if seen[rel] {
 			return nil // already listed as a person match
 		}
+		if !priv.canSee(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir // nothing inside is visible either
+			}
+			return nil
+		}
 		parent := filepath.ToSlash(filepath.Dir(rel))
 		if parent == "." {
 			parent = ""
@@ -2331,6 +2392,9 @@ func metaHandler(w http.ResponseWriter, r *http.Request) {
 	full, err := safePath(baseDir, rel)
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if denyIfPrivate(w, r, rel) {
 		return
 	}
 
@@ -2435,6 +2499,7 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var info FolderInfo
+	priv := privacyFor(r)
 	for _, e := range dirEntries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
@@ -2443,6 +2508,11 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 		entryRel := name
 		if rel != "" {
 			entryRel = filepath.ToSlash(filepath.Join(rel, name))
+		}
+		// Counts, size and — most importantly — the cover thumbnails must never
+		// be drawn from an item this requester can't see.
+		if !priv.canSee(entryRel) {
+			continue
 		}
 		if e.IsDir() {
 			info.FolderCount++
@@ -2481,6 +2551,9 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 			if rel != "" {
 				subRel = filepath.ToSlash(filepath.Join(rel, e.Name()))
 			}
+			if !priv.canSee(subRel) {
+				continue
+			}
 			subEntries, _ := os.ReadDir(filepath.Join(full, e.Name()))
 			for _, se := range subEntries {
 				sn := se.Name()
@@ -2489,6 +2562,9 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				if isImage(sn) || isVideo(sn) {
 					imgRel := filepath.ToSlash(filepath.Join(subRel, sn))
+					if !priv.canSee(imgRel) {
+						continue
+					}
 					if info.FirstImage == "" && isImage(sn) {
 						info.FirstImage = imgRel
 					}
@@ -2765,6 +2841,9 @@ func thumbHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	if denyIfPrivate(w, r, rel) {
+		return
+	}
 
 	thumbPath := cachePathFor(full, variantThumb)
 
@@ -2845,6 +2924,9 @@ func photoHandler(w http.ResponseWriter, r *http.Request) {
 	// files (config, keys, etc.) that happen to sit inside the library tree.
 	if base := filepath.Base(full); !isImage(base) && !isVideo(base) {
 		http.Error(w, "not a photo or video", http.StatusNotFound)
+		return
+	}
+	if denyIfPrivate(w, r, rel) {
 		return
 	}
 
@@ -2973,6 +3055,7 @@ func adminRenameFolderHandler(w http.ResponseWriter, r *http.Request) {
 	if or, err := filepath.Rel(baseDir, full); err == nil {
 		if nr, err2 := filepath.Rel(baseDir, newFull); err2 == nil {
 			renameFavoritePrefix(filepath.ToSlash(or), filepath.ToSlash(nr))
+			renamePrivatePrefix(filepath.ToSlash(or), filepath.ToSlash(nr))
 			renameFacePrefix(filepath.ToSlash(or), filepath.ToSlash(nr))
 		}
 	}
@@ -3153,12 +3236,14 @@ func adminBatchMoveHandler(w http.ResponseWriter, r *http.Request) {
 			invalidateCacheTree(src)
 			if destRel != "" {
 				renameFavoritePrefix(rel, destRel)
+				renamePrivatePrefix(rel, destRel)
 				renameFacePrefix(rel, destRel)
 			}
 		} else {
 			invalidateCache(src)
 			if destRel != "" {
 				renameFavorite(rel, destRel)
+				renamePrivate(rel, destRel)
 				renameFacePath(rel, destRel)
 			}
 		}
@@ -3241,6 +3326,7 @@ func adminBatchRenameHandler(w http.ResponseWriter, r *http.Request) {
 		invalidateCache(full)
 		if nr, err := filepath.Rel(baseDir, newFull); err == nil {
 			renameFavorite(rel, filepath.ToSlash(nr))
+			renamePrivate(rel, filepath.ToSlash(nr))
 			renameFacePath(rel, filepath.ToSlash(nr))
 		}
 		if err := os.Rename(full, newFull); err != nil {
@@ -3271,9 +3357,17 @@ type Stats struct {
 func statsHandler(w http.ResponseWriter, r *http.Request) {
 	var stats Stats
 	folderSizes := map[string]*FolderStat{}
+	priv := privacyFor(r)
 
 	filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
+		// Counts and sizes would otherwise hint at what's hidden.
+		if rel, e := filepath.Rel(baseDir, path); e == nil && rel != "." && !priv.canSee(filepath.ToSlash(rel)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if info.IsDir() {
@@ -3386,6 +3480,7 @@ func adminMoveFileHandler(w http.ResponseWriter, r *http.Request) {
 	if sr, err := filepath.Rel(baseDir, srcFull); err == nil {
 		if dr, err2 := filepath.Rel(baseDir, destFull); err2 == nil {
 			renameFavorite(filepath.ToSlash(sr), filepath.ToSlash(dr))
+			renamePrivate(filepath.ToSlash(sr), filepath.ToSlash(dr))
 			renameFacePath(filepath.ToSlash(sr), filepath.ToSlash(dr))
 		}
 	}
@@ -3912,6 +4007,7 @@ func onThisDayHandler(w http.ResponseWriter, r *http.Request) {
 	built := dateIndexBuilt
 	idx := dateIndex
 	dateIndexMu.RUnlock()
+	idx = visibleDated(r, idx) // drop "Only Me" items for everyone else
 
 	now := time.Now()
 	type item struct {
@@ -3964,6 +4060,7 @@ func timelineHandler(w http.ResponseWriter, r *http.Request) {
 	built := dateIndexBuilt
 	idx := dateIndex
 	dateIndexMu.RUnlock()
+	idx = visibleDated(r, idx) // drop "Only Me" items for everyone else
 
 	offset := clampAtoi(r.URL.Query().Get("offset"), 0, 0, len(idx))
 	limit := clampAtoi(r.URL.Query().Get("limit"), 200, 1, 500)
@@ -4043,6 +4140,7 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 	built := dateIndexBuilt
 	idx := dateIndex
 	dateIndexMu.RUnlock()
+	idx = visibleDated(r, idx) // drop "Only Me" items for everyone else
 
 	type point struct {
 		Path    string  `json:"path"`
@@ -4828,6 +4926,21 @@ func main() {
 		}
 		getOnly(favoritesListHandler)(w, r)
 	}))
+	mux.HandleFunc("/api/private", protected(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			privateListHandler(w, r)
+		case http.MethodPost:
+			if !sameOrigin(r) {
+				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				return
+			}
+			privateSetHandler(w, r)
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
 	mux.HandleFunc("/api/geo", protected(getOnly(geoHandler)))
 	mux.HandleFunc("/api/search", protected(getOnly(searchHandler)))
 	mux.HandleFunc("/api/search/semantic", protected(getOnly(semanticSearchHandler)))
@@ -4985,6 +5098,13 @@ func main() {
 	aiInit()
 	// Outbound notifications — no-op unless a webhook URL is configured.
 	notifyInit(cfg.NotifyURL)
+	// "Only Me" visibility rule. Anything but an explicit "admin" means the
+	// stricter owner-only reading, so a typo can never widen who sees them.
+	if cfg.PrivateScope == "admin" {
+		privateScope = "admin"
+	} else {
+		privateScope = "owner"
+	}
 
 	// On Windows, refuse to start a second copy — ask the existing instance to
 	// show its window instead. Everywhere else this is a no-op (true). The

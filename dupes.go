@@ -857,10 +857,10 @@ func duplicatesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !dupes.running {
 		if dupes.groups != nil {
-			resp["groups"] = dupes.groups
+			resp["groups"] = visibleGroups(r, dupes.groups)
 		}
 		if dupes.similar != nil {
-			resp["similar"] = dupes.similar
+			resp["similar"] = visibleGroups(r, dupes.similar)
 		}
 	}
 	if dupes.err != "" {
@@ -956,8 +956,8 @@ func dupesFolderHandler(w http.ResponseWriter, r *http.Request) {
 		"path":       rel,
 		"recursive":  recursive,
 		"scanned":    len(all),
-		"groups":     exact,
-		"similar":    similar,
+		"groups":     visibleGroups(r, exact),
+		"similar":    visibleGroups(r, similar),
 		"totalWaste": waste,
 	})
 }

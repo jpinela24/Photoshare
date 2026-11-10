@@ -4301,3 +4301,27 @@ body {
 @media (max-width: 768px) {
   .face-review { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 }
+
+/* ── "Only Me" privacy ─────────────────────────────────────────────────────── */
+
+/* Lock button in the lightbox, lit when the item is tagged. */
+.modal-btn-private, .modal-btn-private:hover { color: #818cf8; }
+
+/* Corner badge on a tagged card. Deliberately small and quiet: the owner is
+   the only one who ever sees it, and it shouldn't shout over the photo. */
+.card-private-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  color: #e0e7ff;
+  background: rgba(49, 46, 129, 0.82);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}

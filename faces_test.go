@@ -241,7 +241,7 @@ func TestTinyClustersAreNotPeople(t *testing.T) {
 	if got := personOf("real0"); got == "" {
 		t.Error("a genuine group was dropped")
 	}
-	for _, p := range listPeople() {
+	for _, p := range listPeople(nil) {
 		if p.Count < faceMinClusterSize {
 			t.Errorf("group %s has only %d faces, below the minimum", p.ID, p.Count)
 		}
@@ -267,7 +267,7 @@ func TestFaceStorePersists(t *testing.T) {
 	faces = nil
 	faceMu.Unlock()
 
-	people := listPeople()
+	people := listPeople(nil)
 	if len(people) != 1 || people[0].Name != "Robin" {
 		t.Fatalf("after reload got %+v, want one person named Robin", people)
 	}
@@ -545,7 +545,7 @@ func TestSameNameReportsAConflict(t *testing.T) {
 	if c.Count != 4 {
 		t.Errorf("conflict reports %d photos, want 4", c.Count)
 	}
-	if len(listPeople()) != 2 {
+	if len(listPeople(nil)) != 2 {
 		t.Error("the conflicting name was applied anyway")
 	}
 	if got := personOf("older0"); got != g2 {
@@ -556,7 +556,7 @@ func TestSameNameReportsAConflict(t *testing.T) {
 	if err := namePerson(g2, "Alex", true); err != nil {
 		t.Fatal(err)
 	}
-	people := listPeople()
+	people := listPeople(nil)
 	if len(people) != 1 {
 		t.Fatalf("after merging got %d people, want 1: %+v", len(people), people)
 	}
@@ -662,7 +662,7 @@ func TestAssignByName(t *testing.T) {
 		t.Errorf("assigning to %q made a second person (%s vs %s)", "robin", id2, id)
 	}
 	named := 0
-	for _, p := range listPeople() {
+	for _, p := range listPeople(nil) {
 		if p.Name == "Robin" {
 			named++
 		}
