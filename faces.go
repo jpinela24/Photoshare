@@ -672,7 +672,10 @@ type personSummary struct {
 	To    int64  `json:"to"`    // latest — the span hints at an age range
 }
 
-func listPeople() []personSummary {
+// listPeople summarises each named person. v filters out faces the requester
+// may not see, so a person who only appears in "Only Me" photos doesn't leak
+// through their count or cover thumbnail. Pass nil to skip filtering.
+func listPeople(v *privacyView) []personSummary {
 	faceMu.Lock()
 	defer faceMu.Unlock()
 	loadFacesLocked()
@@ -680,6 +683,9 @@ func listPeople() []personSummary {
 	by := map[string][]*Face{}
 	for _, f := range faces.Faces {
 		if f.Person == "" {
+			continue
+		}
+		if v != nil && !v.canSee(f.Path) {
 			continue
 		}
 		by[f.Person] = append(by[f.Person], f)
@@ -996,7 +1002,7 @@ func facesStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"errors":     errs,
 		"faces":      nFaces,
 		"scanned":    nSeen,
-		"people":     len(listPeople()),
+		"people":     len(listPeople(privacyFor(r))),
 		"minGroup":   faceMinClusterSize,
 	})
 }
@@ -1004,7 +1010,7 @@ func facesStatusHandler(w http.ResponseWriter, r *http.Request) {
 // GET /api/people — the groups, named ones first.
 func peopleListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"people": listPeople()})
+	json.NewEncoder(w).Encode(map[string]any{"people": listPeople(privacyFor(r))})
 }
 
 // GET /api/people/faces?id= — one group's faces.
@@ -1017,7 +1023,11 @@ func peopleFacesHandler(w http.ResponseWriter, r *http.Request) {
 		Taken int64  `json:"taken"`
 	}
 	out := []item{}
+	priv := privacyFor(r)
 	for _, f := range facesOf(id) {
+		if !priv.canSee(f.Path) {
+			continue
+		}
 		out = append(out, item{ID: f.ID, Path: f.Path, Name: filepath.Base(f.Path), Taken: f.Taken})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1035,6 +1045,11 @@ func faceCropHandler(w http.ResponseWriter, r *http.Request) {
 	full, err := safePath(baseDir, f.Path)
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	// A face crop is a piece of the original photo, so it has to obey the same
+	// "Only Me" rule the photo itself does.
+	if denyIfPrivate(w, r, f.Path) {
 		return
 	}
 	// Cached like any other derivative, so a group of 200 faces isn't 200
@@ -1379,7 +1394,10 @@ func sampleFaces(m []*Face) []*Face {
 }
 
 // suggestMerges returns groups that look like the same person, best first.
-func suggestMerges(limit int) []mergeSuggestion {
+// suggestMerges proposes person groups that look like the same face. v filters
+// out faces the requester can't see, so a merge card can't surface a cover crop
+// (or the existence of a group) drawn from an "Only Me" photo. nil = no filter.
+func suggestMerges(limit int, v *privacyView) []mergeSuggestion {
 	faceMu.Lock()
 	defer faceMu.Unlock()
 	loadFacesLocked()
@@ -1387,6 +1405,9 @@ func suggestMerges(limit int) []mergeSuggestion {
 	members := map[string][]*Face{}
 	for _, f := range faces.Faces {
 		if f.Person == "" {
+			continue
+		}
+		if v != nil && !v.canSee(f.Path) {
 			continue
 		}
 		members[f.Person] = append(members[f.Person], f)
@@ -1538,7 +1559,7 @@ func peopleSuggestionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	out := []mergeSuggestion{}
 	if !running {
-		out = suggestMerges(clampAtoi(r.URL.Query().Get("limit"), 12, 1, 50))
+		out = suggestMerges(clampAtoi(r.URL.Query().Get("limit"), 12, 1, 50), privacyFor(r))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"suggestions": out, "scanning": running})

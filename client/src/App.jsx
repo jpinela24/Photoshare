@@ -311,6 +311,7 @@ function VideoCard({ entry, onOpenModal, playingPath, setPlayingPath, focused, o
         </div>
 
       </div>
+      {entry.private && <div className="card-private-badge" title="Only Me — hidden from everyone else"><LockIcon size={11} /></div>}
       <div className="card-label">{entry.name}</div>
       {metaTip}
     </div>
@@ -2717,6 +2718,7 @@ function PhotoCard({ entry, onOpen, adminToken, selectMode, isSelected, onToggle
       {selectMode && <div className="card-checkbox">{isSelected ? '✓' : ''}</div>}
       {!selectMode && <TrashBtn entry={entry} />}
       <img className="card-thumb photo-thumb" src={`/api/thumb?path=${encodeURIComponent(entry.path)}`} alt={entry.name} loading="lazy" />
+      {entry.private && <div className="card-private-badge" title="Only Me — hidden from everyone else"><LockIcon size={11} /></div>}
       <div className="card-label">{entry.name}</div>
       {tooltip}
     </button>
@@ -3178,6 +3180,20 @@ function SettingsModal({ adminToken, onClose }) {
                       </p>
                     )}
                     <UsersManager />
+                    <SettingRow
+                      title="Who can see “Only Me” items"
+                      desc="Photos, videos and folders you tag with the lock are always hidden from viewers and guests. This decides whether your other admin accounts can see them."
+                      stacked
+                    >
+                      <select
+                        className="adm-input"
+                        value={cfg.privateScope === 'admin' ? 'admin' : 'owner'}
+                        onChange={e => set('privateScope', e.target.value)}
+                      >
+                        <option value="owner">Only the account that tagged it (recommended)</option>
+                        <option value="admin">Any admin account</option>
+                      </select>
+                    </SettingRow>
                   </>
                 )}
 
@@ -3449,7 +3465,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.31.0'
+const APP_VERSION = '2.32.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3660,6 +3676,10 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('ps-type-filter', typeFilter) } catch {} }, [typeFilter])
   const [favorites, setFavorites] = useState(() => new Set())
   const [favVersion, setFavVersion] = useState(0) // bumped to refetch the view
+  // Paths tagged "Only Me". The server is the real gate — this set only drives
+  // the lock badge and the toggle's state.
+  const [privatePaths, setPrivatePaths] = useState(() => new Set())
+  const [privVersion, setPrivVersion] = useState(0)
   const uploadInputRef = useRef(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(null)
@@ -3899,6 +3919,37 @@ export default function App() {
       setFavorites(prev => { const n = new Set(prev); next ? n.delete(path) : n.add(path); return n })
     }
   }, [favorites])
+
+  // Only admins can tag, so only admins need the list.
+  useEffect(() => {
+    if (!adminToken) { setPrivatePaths(new Set()); return }
+    fetch('/api/private', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => setPrivatePaths(new Set((d.items || []).map(i => i.path))))
+      .catch(() => {})
+  }, [adminToken, privVersion])
+
+  // Not optimistic, unlike the star: this one decides who can see a photo, so
+  // the badge should only change once the server has actually saved it.
+  const togglePrivate = useCallback(async (p) => {
+    const next = !privatePaths.has(p)
+    try {
+      const r = await fetch('/api/private', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: p, private: next }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      setPrivatePaths(prev => { const n = new Set(prev); next ? n.add(p) : n.delete(p); return n })
+      setPrivVersion(v => v + 1)
+      setBatchStatus(next ? '🔒 Tagged “Only Me” — hidden from everyone else' : 'Unlocked — visible to everyone again')
+      setTimeout(() => setBatchStatus(null), 3000)
+    } catch (e) {
+      setBatchStatus('⚠ ' + (String(e.message || e).trim() || 'Could not change privacy'))
+      setTimeout(() => setBatchStatus(null), 4000)
+    }
+  }, [privatePaths])
 
   const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
   const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
@@ -4628,6 +4679,7 @@ export default function App() {
                     >
                       {selectMode && <div className="card-checkbox">{selItems.has(entry.path) ? '✓' : ''}</div>}
                       {!selectMode && <TrashBtn entry={entry} />}
+                      {entry.private && <div className="card-private-badge" title="Only Me — hidden from everyone else"><LockIcon size={11} /></div>}
                       <FolderThumb folderPath={entry.path} />
                       <div className="card-label">
                         <div className="card-label-text">
@@ -4687,6 +4739,15 @@ export default function App() {
                 title={favorites.has(selected.path) ? 'Remove from favorites' : 'Add to favorites'}
                 onClick={() => toggleFavorite(selected.path)}
               ><StarIcon size={14} filled={favorites.has(selected.path)} /></button>
+              {adminToken && (
+                <button
+                  className={`modal-btn ${privatePaths.has(selected.path) ? 'modal-btn-private' : ''}`}
+                  title={privatePaths.has(selected.path)
+                    ? 'Only Me — hidden from everyone else. Click to unlock.'
+                    : 'Only Me — hide this from everyone else'}
+                  onClick={() => togglePrivate(selected.path)}
+                >{privatePaths.has(selected.path) ? <LockIcon size={14} /> : <UnlockIcon size={14} />}</button>
+              )}
               <a
                 href={`/api/${selected.isVideo ? 'video' : 'photo'}?path=${encodeURIComponent(selected.path)}`}
                 download={selected.name}

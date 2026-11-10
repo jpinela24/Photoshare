@@ -402,9 +402,13 @@ func semanticSearchHandler(w http.ResponseWriter, r *http.Request) {
 	// assigned yourself used to return whatever the model free-associated to
 	// the word instead of that person's photos. Naming a face is an explicit
 	// statement of fact about a photo, and it should outrank a guess.
+	priv := privacyFor(r)
 	results := []SearchEntry{}
 	seen := map[string]bool{}
 	for _, rel := range photosOfNamedPeople(q) {
+		if !priv.canSee(rel) {
+			continue
+		}
 		if len(results) >= searchPersonCap {
 			break
 		}
@@ -438,7 +442,7 @@ func semanticSearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, e := range found {
-		if !seen[e.Path] {
+		if !seen[e.Path] && priv.canSee(e.Path) {
 			results = append(results, e)
 		}
 	}

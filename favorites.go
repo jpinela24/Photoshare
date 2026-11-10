@@ -240,6 +240,9 @@ func favoritesListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	paths := userFavorites(user)
+	// A photo starred before it was tagged "Only Me" must not keep showing up
+	// in someone else's favourites.
+	priv := privacyFor(r)
 	type item struct {
 		Path    string `json:"path"`
 		Name    string `json:"name"`
@@ -247,6 +250,9 @@ func favoritesListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]item, 0, len(paths))
 	for _, p := range paths {
+		if !priv.canSee(p) {
+			continue
+		}
 		name := filepath.Base(p)
 		items = append(items, item{Path: p, Name: name, IsVideo: isVideo(name)})
 	}

@@ -126,7 +126,7 @@ func TestNoSuggestionBelowTheFloor(t *testing.T) {
 	addGroup(st, "c:1", false, 11, 5, tooFar)
 	addGroup(st, "c:2", false, 11, 5, tooFar)
 	withFaceStore(t, st)
-	if got := suggestMerges(10); len(got) != 0 {
+	if got := suggestMerges(10, nil); len(got) != 0 {
 		t.Errorf("suggested a pair that scores below %.2f: %+v", float32(faceSuggestThreshold), got)
 	}
 }
@@ -153,7 +153,7 @@ func TestSuggestsSamePersonAndNotStrangers(t *testing.T) {
 	addGroup(st, "c:3", false, 99, 5, sameAge)
 	withFaceStore(t, st)
 
-	got := suggestMerges(10)
+	got := suggestMerges(10, nil)
 	if len(got) == 0 {
 		t.Fatal("no suggestions — the two halves of one person were never offered")
 	}
@@ -177,13 +177,13 @@ func TestDismissalSurvivesRegrouping(t *testing.T) {
 	addGroup(st, "c:2", false, 11, 5, sameAge)
 	withFaceStore(t, st)
 
-	if len(suggestMerges(10)) == 0 {
+	if len(suggestMerges(10, nil)) == 0 {
 		t.Fatal("nothing suggested to dismiss")
 	}
 	if err := dismissSuggestion("c:1", "c:2"); err != nil {
 		t.Fatal(err)
 	}
-	if got := suggestMerges(10); len(got) != 0 {
+	if got := suggestMerges(10, nil); len(got) != 0 {
 		t.Fatalf("dismissed pair still suggested: %+v", got)
 	}
 
@@ -204,7 +204,7 @@ func TestDismissalSurvivesRegrouping(t *testing.T) {
 	faces.Persons["c:4"] = &Person{ID: "c:4"}
 	faceMu.Unlock()
 
-	if got := suggestMerges(10); len(got) != 0 {
+	if got := suggestMerges(10, nil); len(got) != 0 {
 		t.Errorf("dismissal was lost when the groups were renumbered: %+v", got)
 	}
 }
@@ -217,7 +217,7 @@ func TestNoSuggestionBetweenTwoNamedGroups(t *testing.T) {
 	addGroup(st, "p:2", true, 11, 5, sameAge)
 	withFaceStore(t, st)
 
-	if got := suggestMerges(10); len(got) != 0 {
+	if got := suggestMerges(10, nil); len(got) != 0 {
 		t.Errorf("suggested merging two named people: %+v", got)
 	}
 
@@ -226,7 +226,7 @@ func TestNoSuggestionBetweenTwoNamedGroups(t *testing.T) {
 	addGroup(st2, "p:1", true, 11, 5, sameAge)
 	addGroup(st2, "c:1", false, 11, 5, sameAge)
 	withFaceStore(t, st2)
-	if got := suggestMerges(10); len(got) == 0 {
+	if got := suggestMerges(10, nil); len(got) == 0 {
 		t.Error("did not offer to attach a loose cluster to a named person")
 	}
 }
@@ -241,7 +241,7 @@ func TestEachGroupAppearsOnce(t *testing.T) {
 	}
 	withFaceStore(t, st)
 
-	got := suggestMerges(10)
+	got := suggestMerges(10, nil)
 	seen := map[string]int{}
 	for _, s := range got {
 		seen[s.A]++
@@ -263,7 +263,7 @@ func TestSuggestionsCarryEnoughToDecide(t *testing.T) {
 	addGroup(st, "c:2", false, 11, 4, sameAge)
 	withFaceStore(t, st)
 
-	got := suggestMerges(10)
+	got := suggestMerges(10, nil)
 	if len(got) == 0 {
 		t.Fatal("no suggestions")
 	}
@@ -286,7 +286,7 @@ func TestSuggestionsCarryEnoughToDecide(t *testing.T) {
 // logged-in user can hit.
 func TestSuggestMergesHandlesEmptyAndTiny(t *testing.T) {
 	withFaceStore(t, newStore())
-	if got := suggestMerges(10); len(got) != 0 {
+	if got := suggestMerges(10, nil); len(got) != 0 {
 		t.Errorf("suggestions from an empty store: %+v", got)
 	}
 
@@ -295,7 +295,7 @@ func TestSuggestMergesHandlesEmptyAndTiny(t *testing.T) {
 	// A face with no embedding at all, as a truncated or failed detect leaves.
 	st.Faces["broken#0"] = &Face{ID: "broken#0", Person: "c:1", Emb: nil}
 	withFaceStore(t, st)
-	_ = suggestMerges(10) // must not panic
+	_ = suggestMerges(10, nil) // must not panic
 }
 
 // Merging promotes the survivor to a new id, so a caller that wants to name the
