@@ -788,7 +788,7 @@ func countChildren(dir, rel string, v *privacyView) (photos, videos, folders int
 		if rel != "" {
 			childRel = rel + "/" + name
 		}
-		if !v.canSee(childRel) {
+		if !v.canList(childRel) {
 			continue
 		}
 		switch {
@@ -846,7 +846,7 @@ func browseHandler(w http.ResponseWriter, r *http.Request) {
 			entryRel = name
 		}
 		// "Only Me" items simply don't exist for anyone else.
-		if !priv.canSee(entryRel) {
+		if !priv.canList(entryRel) {
 			continue
 		}
 		_, tagged := priv.taggedBy(entryRel)
@@ -975,7 +975,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // appVersion is the running build's version — must match client APP_VERSION.
-const appVersion = "2.32.0"
+const appVersion = "2.33.0"
 
 // updateRepo is the GitHub "owner/repo" releases are published under, used by
 // the in-app "Check for updates" feature.
@@ -2320,7 +2320,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 			if parent == "." {
 				parent = ""
 			}
-			if !priv.canSee(rel) {
+			if !priv.canList(rel) {
 				continue
 			}
 			seen[rel] = true
@@ -2356,7 +2356,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		if seen[rel] {
 			return nil // already listed as a person match
 		}
-		if !priv.canSee(rel) {
+		if !priv.canList(rel) {
 			if info.IsDir() {
 				return filepath.SkipDir // nothing inside is visible either
 			}
@@ -2511,7 +2511,7 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Counts, size and — most importantly — the cover thumbnails must never
 		// be drawn from an item this requester can't see.
-		if !priv.canSee(entryRel) {
+		if !priv.canList(entryRel) {
 			continue
 		}
 		if e.IsDir() {
@@ -2551,7 +2551,7 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 			if rel != "" {
 				subRel = filepath.ToSlash(filepath.Join(rel, e.Name()))
 			}
-			if !priv.canSee(subRel) {
+			if !priv.canList(subRel) {
 				continue
 			}
 			subEntries, _ := os.ReadDir(filepath.Join(full, e.Name()))
@@ -2562,7 +2562,7 @@ func folderInfoHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				if isImage(sn) || isVideo(sn) {
 					imgRel := filepath.ToSlash(filepath.Join(subRel, sn))
-					if !priv.canSee(imgRel) {
+					if !priv.canList(imgRel) {
 						continue
 					}
 					if info.FirstImage == "" && isImage(sn) {
@@ -3364,7 +3364,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		// Counts and sizes would otherwise hint at what's hidden.
-		if rel, e := filepath.Rel(baseDir, path); e == nil && rel != "." && !priv.canSee(filepath.ToSlash(rel)) {
+		if rel, e := filepath.Rel(baseDir, path); e == nil && rel != "." && !priv.canList(filepath.ToSlash(rel)) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}

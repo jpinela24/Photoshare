@@ -226,6 +226,24 @@ func (v *privacyView) canSee(rel string) bool {
 	return v.admin && privateScope == "admin"
 }
 
+// canList reports whether rel belongs in ordinary listings — browsing, search,
+// the timeline, the map, people, favourites, duplicates, stats.
+//
+// This is deliberately stricter than canSee: a tagged item is left out for
+// *everyone*, its owner included. That's the "vault" half of the feature — you
+// shouldn't have to see your own private photos go past while someone is
+// looking over your shoulder. They live in the Private view instead.
+//
+// canSee still governs whether the bytes may be served, so the owner can open
+// what the Private view lists; the two must not be conflated.
+func (v *privacyView) canList(rel string) bool {
+	if v.none {
+		return true
+	}
+	_, tagged := v.ownerOf(rel)
+	return !tagged
+}
+
 // hasHidden reports whether anything is tagged at all — lets callers skip
 // filtering work entirely on the common case of an untagged library.
 func (v *privacyView) hasHidden() bool { return !v.none }
@@ -280,7 +298,7 @@ func visibleDated(r *http.Request, idx []datedFile) []datedFile {
 	}
 	out := make([]datedFile, 0, len(idx))
 	for _, d := range idx {
-		if v.canSee(d.Path) {
+		if v.canList(d.Path) {
 			out = append(out, d)
 		}
 	}
@@ -300,7 +318,7 @@ func visibleGroups(r *http.Request, groups []DuplicateGroup) []DuplicateGroup {
 	for _, g := range groups {
 		files := make([]DupFile, 0, len(g.Files))
 		for _, f := range g.Files {
-			if v.canSee(f.Path) {
+			if v.canList(f.Path) {
 				files = append(files, f)
 			}
 		}
@@ -311,6 +329,22 @@ func visibleGroups(r *http.Request, groups []DuplicateGroup) []DuplicateGroup {
 		out = append(out, g)
 	}
 	return out
+}
+
+// dirSize totals the regular files under dir, so a tagged folder can report
+// how much it's holding. Errors are skipped rather than failing the listing.
+func dirSize(dir string) int64 {
+	var total int64
+	filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil {
+			total += fi.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -328,9 +362,12 @@ func privateListHandler(w http.ResponseWriter, r *http.Request) {
 		IsDir   bool   `json:"isDir"`
 		IsVideo bool   `json:"isVideo"`
 		Owner   string `json:"owner"`
+		Size    int64  `json:"size,omitempty"`
+		Mod     int64  `json:"mod,omitempty"`
 	}
 	items := []item{}
 	var stale []string
+	var totalSize int64
 	for rel, owner := range v.owners {
 		if !v.canSee(rel) {
 			continue // another admin's tag under "owner" scope
@@ -346,10 +383,18 @@ func privateListHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := filepath.Base(rel)
-		items = append(items, item{
+		it := item{
 			Path: rel, Name: name, IsDir: fi.IsDir(),
 			IsVideo: !fi.IsDir() && isVideo(name), Owner: owner,
-		})
+			Mod: fi.ModTime().Unix(),
+		}
+		if fi.IsDir() {
+			it.Size = dirSize(full) // a tagged folder hides everything inside it
+		} else {
+			it.Size = fi.Size()
+		}
+		totalSize += it.Size
+		items = append(items, it)
 	}
 	// Drop tags whose file is gone, so the list stays honest.
 	for _, rel := range stale {
@@ -358,7 +403,9 @@ func privateListHandler(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"items": items, "scope": privateScope})
+	json.NewEncoder(w).Encode(map[string]any{
+		"items": items, "scope": privateScope, "totalSize": totalSize,
+	})
 }
 
 // POST /api/private  {"path":"...","private":true}

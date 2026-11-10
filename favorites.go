@@ -250,7 +250,7 @@ func favoritesListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]item, 0, len(paths))
 	for _, p := range paths {
-		if !priv.canSee(p) {
+		if !priv.canList(p) {
 			continue
 		}
 		name := filepath.Base(p)

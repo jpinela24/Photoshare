@@ -406,7 +406,7 @@ func semanticSearchHandler(w http.ResponseWriter, r *http.Request) {
 	results := []SearchEntry{}
 	seen := map[string]bool{}
 	for _, rel := range photosOfNamedPeople(q) {
-		if !priv.canSee(rel) {
+		if !priv.canList(rel) {
 			continue
 		}
 		if len(results) >= searchPersonCap {
@@ -442,7 +442,7 @@ func semanticSearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, e := range found {
-		if !seen[e.Path] && priv.canSee(e.Path) {
+		if !seen[e.Path] && priv.canList(e.Path) {
 			results = append(results, e)
 		}
 	}
