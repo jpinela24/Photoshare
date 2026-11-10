@@ -998,6 +998,7 @@ function Sidebar({ currentPath, onNavigate, onFileMoved, onShowStats, onShowSett
           <button className={`util-btn ${currentPath === TIMELINE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(TIMELINE_PATH)}><CalendarIcon size={14} /> Timeline</button>
           <button className={`util-btn ${currentPath === FAVORITES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(FAVORITES_PATH)}><StarIcon size={14} /> Favorites</button>
           <button className={`util-btn ${currentPath === PEOPLE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(PEOPLE_PATH)}><UserIcon size={14} /> People</button>
+          {token && <button className={`util-btn ${currentPath === PRIVATE_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(PRIVATE_PATH)}><LockIcon size={14} /> Private</button>}
           <button className={`util-btn ${currentPath === MEMORIES_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MEMORIES_PATH)}><SparkleIcon size={14} /> On This Day</button>
           <button className={`util-btn ${currentPath === MAP_PATH ? 'util-active' : ''}`} onClick={() => onNavigate(MAP_PATH)}><MapPinIcon size={14} /> Map</button>
         </div>
@@ -1091,6 +1092,7 @@ const MEMORIES_PATH = '__memories__'
 const MAP_PATH = '__map__'
 const TIMELINE_PATH = '__timeline__'
 const FAVORITES_PATH = '__favorites__'
+const PRIVATE_PATH   = '__private__'
 const PEOPLE_PATH = '__people__'
 
 // The special views render their own content instead of a folder listing, so
@@ -1098,7 +1100,7 @@ const PEOPLE_PATH = '__people__'
 // rather than a chain repeated at each site — that chain had to be edited in
 // five places every time a view was added, which is how a view ends up half
 // wired in.
-const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH, FAVORITES_PATH, PEOPLE_PATH]
+const SPECIAL_PATHS = [TRASH_PATH, DUPES_PATH, MEMORIES_PATH, MAP_PATH, TIMELINE_PATH, FAVORITES_PATH, PEOPLE_PATH, PRIVATE_PATH]
 const isSpecialPath = (p) => SPECIAL_PATHS.includes(p)
 
 // ── MapView (geotagged photos on a map) ────────────────────────────────────────
@@ -1971,6 +1973,75 @@ function FavoritesView({ onOpen, onItems, version }) {
             <img src={`/api/thumb?path=${encodeURIComponent(it.path)}`} alt={it.name} loading="lazy" />
             {it.isVideo && <span className="memories-play"><PlayIcon size={14} /></span>}
           </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── PrivateView ───────────────────────────────────────────────────────────────
+//
+// Everything tagged "Only Me", gathered from across the library. Tagged items
+// are deliberately absent from ordinary browsing — this is the one place they
+// appear, which is the point: nothing private goes past while you're scrolling
+// a folder with someone watching.
+
+function PrivateView({ onOpen, onItems, version, onUnlock, onNavigate }) {
+  const [data, setData]   = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/private', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`Server error ${r.status}`)))
+      .then(d => { if (alive) { setData(d); setError(null) } })
+      .catch(e => { if (alive) setError(e.message) })
+    return () => { alive = false }
+  }, [version])
+
+  const items = data?.items || null
+  // Only the files can be paged through in the viewer; folders aren't media.
+  const media = items ? items.filter(i => !i.isDir) : null
+  useEffect(() => { if (media) onItems?.(media) }, [media, onItems])
+  useEffect(() => () => onItems?.(null), [onItems])
+
+  if (error) return <div className="status muted">Couldn't load private items: {error}</div>
+  if (!items) return <div className="status"><div className="spinner" /><span>Loading…</span></div>
+  if (!items.length) return (
+    <div className="status muted">
+      Nothing is private yet — open a photo and press the lock to hide it from everyone else.
+    </div>
+  )
+
+  return (
+    <div className="memories-view">
+      <div className="memories-head">
+        <h2 className="trash-title"><LockIcon size={18} /> Private</h2>
+        <span className="memories-sub">
+          {items.length.toLocaleString()} item{items.length !== 1 ? 's' : ''}
+          {data.totalSize > 0 && ` · ${fmtBytes(data.totalSize)}`}
+          {' · '}hidden from everyone else
+        </span>
+      </div>
+      <div className="memories-grid">
+        {items.map(it => (
+          <div key={it.path} className="private-cell-wrap">
+            <button
+              className="memories-cell"
+              title={it.path}
+              onClick={() => it.isDir ? onNavigate?.(it.path) : onOpen({ name: it.name, path: it.path, isVideo: it.isVideo })}
+            >
+              {it.isDir
+                ? <span className="private-folder"><FolderIcon size={26} /><span className="private-folder-name">{it.name}</span></span>
+                : <img src={`/api/thumb?path=${encodeURIComponent(it.path)}`} alt={it.name} loading="lazy" />}
+              {it.isVideo && <span className="memories-play"><PlayIcon size={14} /></span>}
+            </button>
+            <button
+              className="private-unlock"
+              title={`Unlock — make "${it.name}" visible to everyone again`}
+              onClick={() => onUnlock(it.path)}
+            ><UnlockIcon size={13} /></button>
+          </div>
         ))}
       </div>
     </div>
@@ -3465,7 +3536,7 @@ function FolderPicker({ title, confirmLabel, onConfirm, onClose }) {
   )
 }
 
-const APP_VERSION = '2.32.0'
+const APP_VERSION = '2.33.0'
 
 // ── Service worker ───────────────────────────────────────────────────────────
 //
@@ -3929,6 +4000,9 @@ export default function App() {
       .catch(() => {})
   }, [adminToken, privVersion])
 
+  const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
+  const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
+
   // Not optimistic, unlike the star: this one decides who can see a photo, so
   // the badge should only change once the server has actually saved it.
   const togglePrivate = useCallback(async (p) => {
@@ -3943,16 +4017,20 @@ export default function App() {
       if (!r.ok) throw new Error(await r.text())
       setPrivatePaths(prev => { const n = new Set(prev); next ? n.add(p) : n.delete(p); return n })
       setPrivVersion(v => v + 1)
-      setBatchStatus(next ? '🔒 Tagged “Only Me” — hidden from everyone else' : 'Unlocked — visible to everyone again')
-      setTimeout(() => setBatchStatus(null), 3000)
+      // Tagged items leave ordinary listings entirely, so the folder (and the
+      // lightbox showing it) has to be refreshed — otherwise the grid would
+      // keep displaying something that is no longer part of it.
+      if (next && selected?.path === p) setSelected(null)
+      reload()
+      setBatchStatus(next
+        ? '🔒 Moved to Private — hidden from everyone, including this grid'
+        : 'Unlocked — back in its folder and visible to everyone')
+      setTimeout(() => setBatchStatus(null), 3500)
     } catch (e) {
       setBatchStatus('⚠ ' + (String(e.message || e).trim() || 'Could not change privacy'))
       setTimeout(() => setBatchStatus(null), 4000)
     }
-  }, [privatePaths])
-
-  const bumpTree = useCallback(() => setTreeVersion(v => v + 1), [])
-  const reload = useCallback(() => { setReloadKey(k => k + 1); bumpTree() }, [bumpTree])
+  }, [privatePaths, reload, selected])
 
   // The index is mirrored in a ref because navigate() both reads it (to trim
   // the forward entries) and writes it. Reading it from state meant relying on
@@ -4558,6 +4636,15 @@ export default function App() {
           {path === MAP_PATH && <MapView onOpen={setSelected} onItems={setViewMedia} />}
           {path === TIMELINE_PATH && <TimelineView onOpen={setSelected} onItems={setViewMedia} />}
           {path === FAVORITES_PATH && <FavoritesView onOpen={setSelected} onItems={setViewMedia} version={favVersion} />}
+          {path === PRIVATE_PATH && (
+            <PrivateView
+              onOpen={setSelected}
+              onItems={setViewMedia}
+              version={privVersion}
+              onUnlock={togglePrivate}
+              onNavigate={navigate}
+            />
+          )}
           {path === PEOPLE_PATH && <PeopleView onOpen={setSelected} onItems={setViewMedia} />}
           {isSpecialPath(path) ? null : folderDupes ? (
             <DuplicatesView

@@ -12,7 +12,7 @@ subscriptions, no third-party accounts. It's a single Go binary with an embedded
 React web UI, packaged as a small Docker image (Linux) or an installer with a
 tray icon and a native window (Windows).
 
-**Current version: v2.32.0** · Linux / Docker · Windows
+**Current version: v2.33.0** · Linux / Docker · Windows
 
 ---
 
@@ -55,7 +55,7 @@ tray icon and a native window (Windows).
 - **Optional guest access** toggle.
 - **Persistent sessions** — HttpOnly cookies, ~30-day sliding expiry ("stay logged in").
 - **bcrypt**-hashed passwords and **login rate-limiting**.
-- **“Only Me” private items** — tag a photo, video or folder with the lock and only you can see it; it disappears from every listing and the server refuses to serve it to anyone else, even with the exact path. Configurable in Settings → Users for whether other admins can see them.
+- **“Only Me” private items** — tag a photo, video or folder with the lock and it's hidden from every listing (yours included) and served to nobody else, even with the exact path. Tagged items live in a dedicated **Private** view. Settings → Users chooses whether your other admin accounts can see them.
 
 #### Duplicate finder API
 
@@ -237,6 +237,7 @@ No secrets to configure — both jobs use the automatic `GITHUB_TOKEN`.
 | **2.11.0** | **Better path bar + keyboard/selection** — the address bar gets an **up-one-level** button, a home icon, and scrolls on long paths. Full grid keyboard nav: **↑/↓ jump a row**, Home/End, Enter to open, **Backspace** to go up, Esc to clear, with the focused item auto-scrolled into view. Multi-select now works without entering select mode first: **⌘/Ctrl-click** toggles items, **Shift-click** ranges, **Space** toggles the focused item, **⌘/Ctrl+A** selects all (also fixes a range-select anchor bug) |
 | **2.12.0** | **Upload notifications (integration)** — set an **ntfy** or **Discord** webhook in Settings → System and get a message whenever photos are uploaded (public inbox or a folder). Auto-detects Discord (JSON) vs ntfy/generic (plain POST + Title header), with a **Send test** button. Fire-and-forget, off by default |
 | **2.12.1** | **Tighter, less-cluttered grid** — tiles are smaller across all three densities, the grid now **defaults to Small**, and your density choice is **remembered** across reloads (it used to reset to Medium every time) |
+| **2.33.0** | **Private items are now vaulted** — tagged photos, videos and folders no longer appear in *your* grid either. They're gone from browsing, search, the timeline, the map, memories, people, favourites, duplicates and storage stats for everyone, and live in a new **Private** view in the sidebar (admins only) where you can open them and unlock them one by one. Being able to *fetch* a tagged item and having it *listed* are now separate things, so the view can show your thumbnails while nothing private slides past while you scroll a folder with someone watching. The recycle bin still shows your own deleted private items, so you can restore them |
 | **2.32.0** | **“Only Me” private items** — tag any photo, video or whole folder with the lock and it becomes invisible to everyone else: gone from browsing, search, the map, memories, the timeline, people/faces, duplicates, storage stats and the recycle bin — and the content endpoints refuse to serve it even to someone who knows the exact path, which is the half that actually makes it private rather than merely hidden. Folder counts and cover thumbnails are recomputed so they can't hint at what's hidden, and the tag follows a file through renames and folder moves. Settings → Users chooses whether your **other admin accounts** can see your tagged items (default: no) |
 | **2.31.0** | **Search by a person's name** — naming a face is the most deliberate thing you can tell this app about a photo, and searching that name found nothing: search matched filenames only, and cameras don't put names in filenames. Typing a name you've assigned now returns that person's photos, in **both** search modes — Smart search is backed by CLIP, which matches images by content and has no idea what anyone is called, so a name there used to return whatever the model associated with the word. People are listed first in both, since a name you assigned is a fact about the photo and a model match is a guess; in Smart mode they're still returned even if the sidecar is down |
 | **2.30.1** | **Name a person straight from a merge suggestion** — accepting a suggestion used to leave an unnamed group you then had to find and name, which is most of the work you were trying to avoid. Each card now has an optional name field, pre-filled when one of the two sides is already named. Merging promotes the survivor to a new id, so `/api/people/merge` now reports which group it created and the name is applied to that; typing a name that already exists raises the same "merge with them?" prompt as naming a group does, rather than guessing |

@@ -4325,3 +4325,51 @@ body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
   pointer-events: none;
 }
+
+/* Private view — each cell carries its own unlock affordance, so putting an
+   item back doesn't mean opening it first. */
+.private-cell-wrap { position: relative; }
+
+.private-unlock {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  color: #e0e7ff;
+  background: rgba(30, 27, 75, 0.78);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.private-cell-wrap:hover .private-unlock,
+.private-unlock:focus-visible { opacity: 1; }
+.private-unlock:hover { background: #4338ca; }
+
+/* Tagged folders have no thumbnail of their own — everything inside is
+   hidden, so there's nothing safe to preview. */
+.private-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  color: #a5b4fc;
+  background: rgba(49, 46, 129, 0.25);
+}
+.private-folder-name {
+  font-size: 0.72rem;
+  padding: 0 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -685,7 +685,7 @@ func listPeople(v *privacyView) []personSummary {
 		if f.Person == "" {
 			continue
 		}
-		if v != nil && !v.canSee(f.Path) {
+		if v != nil && !v.canList(f.Path) {
 			continue
 		}
 		by[f.Person] = append(by[f.Person], f)
@@ -1025,7 +1025,7 @@ func peopleFacesHandler(w http.ResponseWriter, r *http.Request) {
 	out := []item{}
 	priv := privacyFor(r)
 	for _, f := range facesOf(id) {
-		if !priv.canSee(f.Path) {
+		if !priv.canList(f.Path) {
 			continue
 		}
 		out = append(out, item{ID: f.ID, Path: f.Path, Name: filepath.Base(f.Path), Taken: f.Taken})
@@ -1407,7 +1407,7 @@ func suggestMerges(limit int, v *privacyView) []mergeSuggestion {
 		if f.Person == "" {
 			continue
 		}
-		if v != nil && !v.canSee(f.Path) {
+		if v != nil && !v.canList(f.Path) {
 			continue
 		}
 		members[f.Person] = append(members[f.Person], f)

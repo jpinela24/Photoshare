@@ -148,8 +148,10 @@ func TestPrivateItemHiddenFromBrowse(t *testing.T) {
 	if len(got) != 1 || got[0] != "public.jpg" {
 		t.Errorf("viewer sees %v, want only [public.jpg]", got)
 	}
-	if o := names("owner"); len(o) != 2 {
-		t.Errorf("owner sees %v, want both files", o)
+	// Vault behaviour: hidden from the owner's ordinary browsing too — tagged
+	// items live in the Private view, not in the folder they came from.
+	if o := names("owner"); len(o) != 1 || o[0] != "public.jpg" {
+		t.Errorf("owner browsing sees %v, want only [public.jpg] (tagged item is vaulted)", o)
 	}
 }
 
@@ -200,8 +202,8 @@ func TestFolderCountsExcludePrivate(t *testing.T) {
 	if got := count("viewer"); got != 2 {
 		t.Errorf("viewer sees photo count %d, want 2 (private one excluded)", got)
 	}
-	if got := count("owner"); got != 3 {
-		t.Errorf("owner sees photo count %d, want 3", got)
+	if got := count("owner"); got != 2 {
+		t.Errorf("owner sees photo count %d, want 2 — tagged items are vaulted for everyone", got)
 	}
 }
 
@@ -227,8 +229,8 @@ func TestPrivateItemHiddenFromSearch(t *testing.T) {
 			t.Errorf("search leaked a private item to a viewer: %v", hits("viewer"))
 		}
 	}
-	if len(hits("owner")) != 2 {
-		t.Errorf("owner search = %v, want both", hits("owner"))
+	if o := hits("owner"); len(o) != 1 {
+		t.Errorf("owner search = %v, want only the untagged one (tagged items are vaulted)", o)
 	}
 }
 
@@ -332,5 +334,69 @@ func TestForgetPrivateDropsTagAndDescendants(t *testing.T) {
 	}
 	if !hasOther {
 		t.Error("forgetPrivate removed an unrelated tag")
+	}
+}
+
+// ── Vault semantics ──────────────────────────────────────────────────────────
+
+// The two halves of the feature must not collapse into one: a tagged item is
+// kept out of every ordinary listing (the owner's included), yet the owner can
+// still fetch it — otherwise the Private view would have nothing to show.
+func TestVaultedFromListingsButStillFetchableByOwner(t *testing.T) {
+	lib := privTestEnv(t)
+	seedPhoto(t, lib, "Album/secret.jpg")
+	setPrivate("owner", "Album/secret.jpg", true)
+
+	owner := privacyFor(asUser(t, "owner", "/"))
+	if owner.canList("Album/secret.jpg") {
+		t.Error("tagged item still appears in the owner's listings — not vaulted")
+	}
+	if !owner.canSee("Album/secret.jpg") {
+		t.Error("owner cannot fetch their own tagged item — the Private view would be empty")
+	}
+
+	viewer := privacyFor(asUser(t, "viewer", "/"))
+	if viewer.canList("Album/secret.jpg") || viewer.canSee("Album/secret.jpg") {
+		t.Error("a viewer can reach a tagged item")
+	}
+
+	// Serving still works for the owner, which is what makes the view usable.
+	w := httptest.NewRecorder()
+	photoHandler(w, asUser(t, "owner", "/api/photo?path=Album/secret.jpg"))
+	if w.Code != http.StatusOK {
+		t.Errorf("owner fetching their tagged photo = %d, want 200", w.Code)
+	}
+}
+
+// The Private view lists exactly the owner's tagged items.
+func TestPrivateListReturnsOnlyOwnTags(t *testing.T) {
+	lib := privTestEnv(t)
+	seedPhoto(t, lib, "a.jpg")
+	seedPhoto(t, lib, "b.jpg")
+	seedPhoto(t, lib, "c.jpg")
+	setPrivate("owner", "a.jpg", true)
+	setPrivate("other", "b.jpg", true)
+	privateScope = "owner"
+
+	list := func(user string) []string {
+		w := httptest.NewRecorder()
+		privateListHandler(w, asUser(t, user, "/api/private"))
+		var got struct {
+			Items []struct {
+				Path string `json:"path"`
+			} `json:"items"`
+		}
+		json.NewDecoder(w.Body).Decode(&got)
+		var out []string
+		for _, i := range got.Items {
+			out = append(out, i.Path)
+		}
+		return out
+	}
+	if o := list("owner"); len(o) != 1 || o[0] != "a.jpg" {
+		t.Errorf("owner's private list = %v, want [a.jpg]", o)
+	}
+	if o := list("other"); len(o) != 1 || o[0] != "b.jpg" {
+		t.Errorf("other admin's private list = %v, want [b.jpg]", o)
 	}
 }
